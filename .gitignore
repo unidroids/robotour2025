@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+venv-robotour/
+
+# VS Code metadata
+.vscode/
+*.code-workspace
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS files
+.DS_Store
+Thumbs.db
+
