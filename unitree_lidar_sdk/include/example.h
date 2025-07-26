@@ -3,6 +3,7 @@
 ***********************************************************************/
 
 #pragma once
+#include <chrono>
 
 #include "unitree_lidar_sdk.h"
 
@@ -55,8 +56,19 @@ void exampleProcess(UnitreeLidarReader *lreader){
     int result;
     LidarImuData imu;
     PointCloudUnitree cloud;
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(100);
+    int first_time = true;
     while (true)
     {
+
+        auto now = std::chrono::steady_clock::now();
+
+        if (now >= deadline) {
+            std::cout << "Timeout 3s vypršel.\n";
+            break;
+        }
+
         result = lreader->runParse();
 
         switch (result)
@@ -88,13 +100,21 @@ void exampleProcess(UnitreeLidarReader *lreader){
             break;
 
         case LIDAR_POINT_DATA_PACKET_TYPE:
+            
+            if (first_time) {
+                deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                first_time = false;
+                printf("points (x,y,z,intensity,time,ring)\n");
+            }
+
             if (lreader->getPointCloud(cloud))
             {
-                printf("A Cloud msg is parsed! \n");
-                printf("\tstamp = %f, id = %d\n", cloud.stamp, cloud.id);
-                printf("\tcloud size  = %ld, ringNum = %d\n", cloud.points.size(), cloud.ringNum);
-                printf("\tfirst 10 points (x,y,z,intensity,time,ring) = \n");
-                for (int i = 0; i < 10; i++)
+                //printf("A Cloud msg is parsed! \n");
+                //printf("\tstamp = %f, id = %d\n", cloud.stamp, cloud.id);
+                //printf("\tcloud size  = %ld, ringNum = %d\n", cloud.points.size(), cloud.ringNum);
+                //printf("\tfirst 10 points (x,y,z,intensity,time,ring) = \n");
+                int cloud_size = cloud.points.size();
+                for (int i = 0; i < cloud_size; i++)
                 {
                     printf("\t  (%f, %f, %f, %f, %f, %d)\n",
                            cloud.points[i].x,
@@ -104,7 +124,7 @@ void exampleProcess(UnitreeLidarReader *lreader){
                            cloud.points[i].time,
                            cloud.points[i].ring);
                 }
-                printf("\t  ...\n");
+                //printf("\t  ...\n");
             }
 
             break;
