@@ -12,6 +12,10 @@ from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 
+import socket
+import platform
+import os
+
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="/opt/projects/robotour/server/static"), name="static")
@@ -33,6 +37,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def root():
     #return JSONResponse(content={"message": "Hello from FastAPI!"})
     return FileResponse("/opt/projects/robotour/server/static/service.html")
+    #return FileResponse("/opt/projects/robotour/server/static/view_test.html")
 
 @app.get("/favicon.ico")
 async def favicon():
@@ -50,3 +55,19 @@ async def shutdown(request: Request):
         return {"status": "shutdown initiated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/info")
+async def info():
+    hostname = socket.gethostname()
+    try:
+        ip = socket.gethostbyname(hostname)
+    except:
+        ip = "unknown"
+
+    return {
+        "hostname": hostname,
+        "ip": ip,
+        "system": platform.system(),
+        "release": platform.release(),
+        "cpu_count": os.cpu_count()
+    }
