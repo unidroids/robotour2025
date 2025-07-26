@@ -16,6 +16,10 @@ import socket
 import platform
 import os
 
+import asyncio
+import datetime
+
+
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="/opt/projects/robotour/server/static"), name="static")
@@ -71,3 +75,34 @@ async def info():
         "release": platform.release(),
         "cpu_count": os.cpu_count()
     }
+
+@app.get("/lidar_test")
+async def lidar_test():
+    log_path = "/data/logs/fastapi/lidar_test.log"
+    binary = "/opt/projects/robotour/unitree_lidar_sdk/bin/example_lidar_udp"
+    start_time = datetime.datetime.now().isoformat()
+
+    async def run_lidar():
+        try:
+            with open(log_path, "a") as f:
+                f.write(f"\n[{start_time}] Spouštím {binary}...\n")
+            proc = await asyncio.create_subprocess_exec(
+                binary,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await proc.communicate()
+            end_time = datetime.datetime.now().isoformat()
+
+            with open(log_path, "a") as f:
+                f.write(f"[{end_time}] Dokončeno, návratový kód {proc.returncode}\n")
+                f.write(stdout.decode() if stdout else "")
+                f.write(stderr.decode() if stderr else "")
+        except Exception as e:
+            with open(log_path, "a") as f:
+                f.write(f"[chyba] {str(e)}\n")
+
+    # Spusť proces na pozadí (nebude čekat na dokončení)
+    asyncio.create_task(run_lidar())
+
+    return {"status": "lidar test started", "path": binary}
