@@ -27,6 +27,8 @@ systemctl status zeroconf
 systemctl status fastapi-server
 systemctl status zeroconf
 
+# restart
+sudo systemctl restart fastapi-server
 
 # vypis
 nano /data/logs/fastapi/fastapi.log 
