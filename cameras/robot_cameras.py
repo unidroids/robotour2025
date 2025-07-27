@@ -8,8 +8,22 @@ import os
 from datetime import datetime
 import time
 
+# zakladní vlákna : ctení kamer, logování
 running_loop = False
 loop_thread = None
+
+log_thread = None
+log_running = False
+
+
+# Sdílené snímky z kamer
+latest_left = None
+latest_right = None
+
+# Synchronizace mezi smyčkami
+frame_lock = threading.Lock()
+frame_event = threading.Event()
+
 
 HOST = '127.0.0.1'   # Lokální přístup
 PORT = 9001          # Port pro pravou kameru (můžeme později rozšířit)
@@ -26,6 +40,7 @@ def read_line(conn):
 def handle_client(conn, addr):
     print(f"📡 Klient připojen: {addr}")
     global running_loop, loop_thread
+    global log_running, log_thread
     try:
         with conn:
             while True:
@@ -41,13 +56,22 @@ def handle_client(conn, addr):
                         running_loop = True
                         loop_thread = threading.Thread(target=camera_loop_thread)
                         loop_thread.start()
-                        conn.sendall(b"OK\n")
+                        conn.sendall(b"LOOP OK\n")
                     else:
-                        conn.sendall(b"ALREADY\n")
+                        conn.sendall(b"LOOP ALREADY\n")
+
+                    if not log_running:
+                        log_running = True
+                        log_thread = threading.Thread(target=log_loop_thread)
+                        log_thread.start()
+                        conn.sendall(b"LOG OK\n")
+                    else:
+                        conn.sendall(b"LOG ALREADY\n")
 
                 elif cmd == "STOP": # STOP - stops internal loop
                     if running_loop:
                         running_loop = False
+                        frame_event.set()  # probudí vlákno, aby se ukončilo
                         conn.sendall(b"OK\n")
                     else:
                         conn.sendall(b"NOTRUN\n")
@@ -89,8 +113,33 @@ def gst_pipeline(sensor_id: int, w: int = 1640, h: int = 1232, fps: int = 30) ->
         "videoconvert ! video/x-raw, format=BGR ! appsink drop=true"
     )
 
+def log_loop_thread():
+    global log_running
+    print("📝 Logovací vlákno spuštěno")
+    path = "/robot/data/logs/camera"
+    os.makedirs(path, exist_ok=True)
+
+    while log_running:
+        frame_event.wait(timeout=5.0)  # počká na nový snímek (nebo každých 5s)
+
+        with frame_lock:
+            left = latest_left.copy() if latest_left is not None else None
+            right = latest_right.copy() if latest_right is not None else None
+            frame_event.clear()
+
+        if left is not None and right is not None:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            combined = cv2.hconcat([left, right])
+            cv2.imwrite(f"{path}/stereo_{ts}.jpg", combined, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            print(f"💾 Uloženo: stereo_{ts}.jpg")
+
+        time.sleep(3)  # zapisuj foto každých x sekund
+
+    print("🛑 Logovací vlákno ukončeno")
+
+
 def camera_loop_thread():
-    global running_loop
+    global running_loop, latest_left, latest_right
     print("📷 Smyčka kamer spuštěna (2 MP GStreamer)")
     try:
         capL = cv2.VideoCapture(gst_pipeline(0), cv2.CAP_GSTREAMER)
@@ -104,21 +153,24 @@ def camera_loop_thread():
         while running_loop:
             retL, frameL = capL.read()
             retR, frameR = capR.read()
-            if retL:
-                frameL = cv2.rotate(frameL, cv2.ROTATE_90_CLOCKWISE)
-            if retR:
-                frameR = cv2.rotate(frameR, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            path = "/robot/data/logs/camera"
-            os.makedirs(path, exist_ok=True)
+        if retL:
+            frameL = cv2.rotate(frameL, cv2.ROTATE_90_CLOCKWISE)
+            frameL = frameL[150:-165, :]  # ořízni horních 150 a spodních 160 px
+        if retR:
+            frameR = cv2.rotate(frameR, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            frameR = frameR[150:-165, :]
 
-            if retL:
-                cv2.imwrite(f"{path}/left_{ts}.jpg", frameL, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
-            if retR:
-                cv2.imwrite(f"{path}/right_{ts}.jpg", frameR, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
 
-            time.sleep(1.0)  # každou sekundu
+            with frame_lock:
+                if retL:
+                    latest_left = frameL.copy()
+                if retR:
+                    latest_right = frameR.copy()
+                if retL and retR:
+                    frame_event.set()  # signalizujeme že snímky jsou připraveny
+
+            time.sleep(1.0)  # můžeš zkrátit např. na 0.2 pro plynulejší běh
 
     except Exception as e:
         print(f"❌ Kamera loop chyba: {e}")
@@ -126,7 +178,6 @@ def camera_loop_thread():
         capL.release()
         capR.release()
         print("🛑 Smyčka kamer ukončena")
-
 
 if __name__ == "__main__":
     start_server()
