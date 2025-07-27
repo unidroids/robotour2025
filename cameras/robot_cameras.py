@@ -52,6 +52,10 @@ def handle_client(conn, addr):
                     else:
                         conn.sendall(b"NOTRUN\n")
 
+                elif cmd == "EXIT": # ukončí while smyčku a spojení
+                    conn.sendall(b"BYE\n")
+                    break  
+
                 elif cmd == "LCAM":
                     conn.sendall(b"OK\n")
                 elif cmd == "RCAM":
