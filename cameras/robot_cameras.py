@@ -71,10 +71,16 @@ def handle_client(conn, addr):
                 elif cmd == "STOP": # STOP - stops internal loop
                     if running_loop:
                         running_loop = False
-                        frame_event.set()  # probudí vlákno, aby se ukončilo
-                        conn.sendall(b"OK\n")
+                        conn.sendall(b"LOOP OK\n")
                     else:
-                        conn.sendall(b"NOTRUN\n")
+                        conn.sendall(b"LOOP NOTRUN\n")
+
+                    if log_running:
+                        log_running = False
+                        frame_event.set()  # probudí vlákno, aby se ukončilo
+                        conn.sendall(b"LOG OK\n")
+                    else:
+                        conn.sendall(b"LOG NOTRUN\n")
 
                 elif cmd == "EXIT": # ukončí while smyčku a spojení
                     conn.sendall(b"BYE\n")
@@ -99,10 +105,20 @@ def start_server():
     server.listen()
     print(f"📷 robot-cameras server naslouchá na {HOST}:{PORT}")
 
-    while True:
-        conn, addr = server.accept()
-        thread = threading.Thread(target=handle_client, args=(conn, addr))
-        thread.start()
+    try:
+        while True:
+            server.settimeout(1.0)  # umožní kontrolu shutdown_flag
+            try:
+                conn, addr = server.accept()
+            except socket.timeout:
+                continue
+            thread = threading.Thread(target=handle_client, args=(conn, addr))
+            thread.start()
+    except KeyboardInterrupt:
+        print("\n🧯 Ctrl+C – ukončuji server")
+    finally:
+        server.close()
+        print("🛑 Port uvolněn, server ukončen")
 
 
 def gst_pipeline(sensor_id: int, w: int = 1640, h: int = 1232, fps: int = 30) -> str:
@@ -151,26 +167,31 @@ def camera_loop_thread():
             return
 
         while running_loop:
+            t0 = time.time()
             retL, frameL = capL.read()
+            t1 = time.time()
             retR, frameR = capR.read()
+            t2 = time.time()
 
-        if retL:
-            frameL = cv2.rotate(frameL, cv2.ROTATE_90_CLOCKWISE)
-            frameL = frameL[150:-165, :]  # ořízni horních 150 a spodních 160 px
-        if retR:
-            frameR = cv2.rotate(frameR, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            frameR = frameR[150:-165, :]
+            dt_left = (t1 - t0) * 1000  # ms
+            dt_right = (t2 - t1) * 1000  # ms
+            dt_total = (t2 - t0) * 1000
 
+            print(f"⏱ Kamera L: {dt_left:.1f} ms, R: {dt_right:.1f} ms, Δ celkem: {dt_total:.1f} ms")
 
-            with frame_lock:
-                if retL:
+            if retL and retR:
+                frameL = cv2.rotate(frameL, cv2.ROTATE_90_CLOCKWISE)
+                frameL = frameL[150:-165, :]
+                frameR = cv2.rotate(frameR, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                frameR = frameR[150:-165, :]
+
+                with frame_lock:
                     latest_left = frameL.copy()
-                if retR:
                     latest_right = frameR.copy()
-                if retL and retR:
-                    frame_event.set()  # signalizujeme že snímky jsou připraveny
+                    frame_event.set()
 
-            time.sleep(1.0)  # můžeš zkrátit např. na 0.2 pro plynulejší běh
+            time.sleep(1.0) #pauza mezi snímky
+
 
     except Exception as e:
         print(f"❌ Kamera loop chyba: {e}")
