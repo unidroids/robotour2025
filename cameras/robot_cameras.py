@@ -57,6 +57,8 @@ def handle_client(conn, addr):
                 except socket.timeout:
                     if (shutdown_flag):
                         conn.sendall(b"SERVER SHUTDOWN\n")
+                        conn.sendall(b'')
+                        conn.shutdown(socket.SHUT_RDWR)
                         conn.close()
                         break
                     else:
@@ -101,6 +103,8 @@ def handle_client(conn, addr):
 
                 elif cmd == "EXIT": # ukončí while smyčku a spojení
                     conn.sendall(b"BYE\n")
+                    conn.sendall(b'')
+                    conn.shutdown(socket.SHUT_RDWR)
                     conn.close()
                     break  
 
