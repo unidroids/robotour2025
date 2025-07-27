@@ -8,6 +8,12 @@ import os
 from datetime import datetime
 import time
 
+
+# vlákna klintů
+client_threads = []
+client_threads_lock = threading.Lock()
+shutdown_flag = False
+
 # zakladní vlákna : ctení kamer, logování
 running_loop = False
 loop_thread = None
@@ -41,13 +47,24 @@ def handle_client(conn, addr):
     print(f"📡 Klient připojen: {addr}")
     global running_loop, loop_thread
     global log_running, log_thread
+    global client_threads, client_threads_lock, shutdown_flag
     try:
+        conn.settimeout(2.0)
         with conn:
             while True:
-                cmd = read_line(conn)
-                if not cmd:
-                    break
+                try:
+                    cmd = read_line(conn)
+                    if not cmd:
+                        break
+                except socket.timeout:
+                    if shutdown_flag:
+                        conn.sendall(b"SERVER SHUTTING DOWN\n")
+                        break  # vynucený konec
+                    continue  # jinak jen čekáme dál
+
+
                 print(f"📥 Příkaz: '{cmd}'")
+
                 if cmd == "PING": # PING - communication test
                     conn.sendall(b"PONG\n")
 
@@ -97,27 +114,46 @@ def handle_client(conn, addr):
     except Exception as e:
         print(f"❌ Chyba: {e}")
     finally:
+        with client_threads_lock:
+            for t in client_threads:
+                if t.ident == threading.get_ident():
+                    client_threads.remove(t)
+                    break        
         print(f"🔌 Odpojeno: {addr}")
 
 def start_server():
+    global running_loop, log_running
+    global client_threads, client_threads_lock, shutdown_flag
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((HOST, PORT))
     server.listen()
     print(f"📷 robot-cameras server naslouchá na {HOST}:{PORT}")
 
     try:
-        while True:
+        while not shutdown_flag:
             server.settimeout(1.0)  # umožní kontrolu shutdown_flag
             try:
                 conn, addr = server.accept()
             except socket.timeout:
                 continue
             thread = threading.Thread(target=handle_client, args=(conn, addr))
+            with client_threads_lock:
+                client_threads.append(thread)            
             thread.start()
     except KeyboardInterrupt:
+        shutdown_flag = True
         print("\n🧯 Ctrl+C – ukončuji server")
     finally:
         server.close()
+        log_running=False
+        running_loop=False
+        frame_event.set()
+        print("⌛ Čekám na dokončení klientských vláken…")
+        with client_threads_lock:
+            for t in client_threads:
+                t.join(timeout=5.0)  # můžeš nastavit např. 2s timeout
+        print("✅ Všechna klientská vlákna ukončena")
         print("🛑 Port uvolněn, server ukončen")
 
 
