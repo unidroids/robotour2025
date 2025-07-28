@@ -11,6 +11,12 @@ import time
 from pyzbar import pyzbar
 import traceback
 
+from collections import deque
+from threading import Condition
+
+# maximální počet uložených snímků; 30 ≈ 3 s při 10 fps
+BUFFER_SIZE = 3
+
 # vlákna klintů
 shutdown_flag = False
 
@@ -23,13 +29,23 @@ log_thread = None
 
 
 # Sdílené snímky z kamer
-latest_left = None
-latest_right = None
+# latest_left = None
+# latest_right = None
+
+# kruhové buffery pro levý/pravý obraz
+left_buf  = deque(maxlen=BUFFER_SIZE)
+right_buf = deque(maxlen=BUFFER_SIZE)
+
+# Sekvenční číslo posledního uloženého snímku
+frame_seq = 0 
+
+# Condition (obsahuje interní Lock)
+frame_cond = Condition()
 
 # Synchronizace mezi smyčkami
-frame_lock = threading.Lock()
-frame_event_log = threading.Event()
-frame_event_qr = threading.Event()
+# frame_lock = threading.Lock()
+# frame_event_log = threading.Event()
+# frame_event_qr = threading.Event()
 
 #promenne ke QR kodu
 qr_running = False
@@ -106,15 +122,15 @@ def handle_client(conn, addr):
                     with state_lock:
                         if loop_running:
                             loop_running = False
-                            conn.sendall(b"LOOP OK\n")
+                            conn.sendall(b"LOOP STOP\n")
                         else:
                             conn.sendall(b"LOOP NOTRUN\n")
 
                         if log_running:
                             log_running = False
-                            frame_event_log.set()  # probudí vlákno, aby se ukončilo
-                            frame_event_qr.set()  # probudí vlákno, aby se ukončilo
-                            conn.sendall(b"LOG OK\n")
+                            #frame_event_log.set()  # probudí vlákno, aby se ukončilo
+                            #frame_event_qr.set()  # probudí vlákno, aby se ukončilo
+                            conn.sendall(b"LOG STOP\n")
                         else:
                             conn.sendall(b"LOG NOTRUN\n")
 
@@ -129,14 +145,18 @@ def handle_client(conn, addr):
                     shutdown_flag = True
 
                 elif cmd == "QR":
-
-                    print(f"🧾 QR STARTED")
+                    if not loop_running:
+                        print(f"QR:LOOP DID NOT STARTED. CALL 'RUN' BEFORE 'QR' COMMAND")
+                        conn.sendall(f"QR:LOOP DID NOT STARTED. CALL 'RUN' BEFORE 'QR' COMMAND\n".encode())
+                        continue
 
                     with qr_lock:
                         if not qr_running:
                             qr_running = True
                             qr_thread = threading.Thread(target=qr_worker, daemon=True)
                             qr_thread.start()
+
+                    print(f"🧾 QR STARTED")
 
                     # počkej na výsledek nebo timeout
                     deadline = time.time() + 120
@@ -145,16 +165,15 @@ def handle_client(conn, addr):
                             if qr_result:
                                 conn.sendall(f"QR:{qr_result}\n".encode())
                                 print(f"🧾 QR FOUND:{qr_result}\n")
-                                conn.shutdown(socket.SHUT_RDWR)
-                                conn.close()
                                 break
                         
                     if (time.time() < deadline and qr_result is None):
                         conn.sendall("QR:NONE\n".encode())
                         print(f"🧾 QR TIMEOUT\n")
-                        conn.shutdown(socket.SHUT_RDWR)
-                        conn.close()
-                        break               
+
+                    conn.shutdown(socket.SHUT_RDWR)
+                    conn.close()
+                    break               
 
                 elif cmd == "LCAM":
                     conn.sendall(b"OK\n")
@@ -168,26 +187,43 @@ def handle_client(conn, addr):
         print(f"🔌 Odpojeno: {addr}")
 
 def qr_worker():
-    global qr_result, shutdown_flag, qr_ready, frame_event_qr, latest_right, qr_lock, qr_running
+    global shutdown_flag, qr_result, qr_ready, qr_lock, qr_running
+    global frame_cond, right_buf, frame_seq
+    global loop_running
+    #frame_event_qr, latest_right, qr_lock, qr_running
 
     deadline = time.time() + 120
     qr_result = None
-    frame_event_qr.clear()
+    last_seq = 0
+    #frame_event_qr.clear()
 
-    while (time.time() < deadline and not shutdown_flag ):
-        if frame_event_qr.wait(timeout=10):
-            frame_event_qr.clear()
-            if latest_right is None:
+    while time.time() < deadline and not shutdown_flag and loop_running:
+        # with frame_cond:
+        #     frame_cond.wait(timeout=10)
+        #     if not right_buf:
+        #         continue
+        #     latest = right_buf[-1]
+
+        # if frame_event_qr.wait(timeout=10):
+        #     frame_event_qr.clear()
+        #     if latest_right is None:
+        #         continue
+
+        with frame_cond:
+            frame_cond.wait_for(lambda: frame_seq > last_seq or not shutdown_flag, timeout=2)
+            if frame_seq == last_seq:
                 continue
+            last_seq = frame_seq
+            latest = right_buf[-1]
 
-            codes = pyzbar.decode(cv2.cvtColor(latest_right, cv2.COLOR_BGR2GRAY))
-            print(f"🧾 QR data ... {len(codes)}")
+        codes = pyzbar.decode(cv2.cvtColor(latest, cv2.COLOR_BGR2GRAY))
+        print(f"🧾 QR data ... {len(codes)}")
 
-            for code in codes:
-                data = code.data.decode("utf-8")
-                if data.startswith("geo:"):  # nebo jiný filtr
-                    qr_result = data
-                    break
+        for code in codes:
+            data = code.data.decode("utf-8")
+            if data.startswith("geo:"):  # nebo jiný filtr
+                qr_result = data
+                break
 
         if qr_result:
             qr_ready.set()
@@ -222,8 +258,8 @@ def start_server():
         server.close()
         log_running=False
         loop_running=False
-        frame_event_qr.set()
-        frame_event_log.set()  
+        #frame_event_qr.set()
+        #frame_event_log.set()  
         time.sleep(0.1)
         print("🛑 Port uvolněn, server ukončen")
 
@@ -237,18 +273,29 @@ def gst_pipeline(sensor_id: int, w: int = 1640, h: int = 1232, fps: int = 10) ->
     )
 
 def log_loop_thread():
-    global log_running
+    global log_running, frame_cond, left_buf, right_buf, frame_seq
+    global shutdown_flag
     print("📝 Logovací vlákno spuštěno")
     path = "/robot/data/logs/camera"
     os.makedirs(path, exist_ok=True)
+    last_seq = 0
 
-    while log_running:
-        frame_event_log.wait(timeout=5.0)  # počká na nový snímek (nebo každých 5s)
+    while log_running and not shutdown_flag:
+        with frame_cond:
+            #frame_event_log.wait(timeout=5.0)  # počká na nový snímek (nebo každých 5s)
+            #frame_cond.wait(timeout=5.0)  # uspí vlákno, dokud není notify_all()
+            frame_cond.wait_for(lambda: frame_seq > last_seq or not log_running, timeout=2)
 
-        with frame_lock:
-            left = latest_left.copy() if latest_left is not None else None
-            right = latest_right.copy() if latest_right is not None else None
-            frame_event_log.clear()
+            if frame_seq == last_seq: # timeout bez nového snímku
+                continue           
+            last_seq = frame_seq # zaznamenat, co jsme už zvedli                             
+
+            left  = left_buf[-1]  # vždy vezmeme NEJNOVĚJŠÍ snímek
+            right = right_buf[-1]
+            # with frame_lock:
+            #     left = latest_left.copy() if latest_left is not None else None
+            #     right = latest_right.copy() if latest_right is not None else None
+            #     frame_event_log.clear()
 
         if left is not None and right is not None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -262,7 +309,10 @@ def log_loop_thread():
 
 
 def camera_loop_thread():
-    global loop_running, latest_left, latest_right
+    global loop_running, shutdown_flag #, latest_left, latest_right
+    global left_buf, right_buf, frame_cond, frame_seq
+    prev_id = None
+
     print("📷 Smyčka kamer spuštěna (2 MP GStreamer)")
     try:
         capL = cv2.VideoCapture(gst_pipeline(0), cv2.CAP_GSTREAMER)
@@ -273,7 +323,7 @@ def camera_loop_thread():
             loop_running = False
             return
 
-        while loop_running:
+        while loop_running and not shutdown_flag:
             t0 = time.time()
             retL, frameL = capL.read()
             t1 = time.time()
@@ -284,19 +334,28 @@ def camera_loop_thread():
             dt_right = (t2 - t1) * 1000  # ms
             dt_total = (t2 - t0) * 1000
 
-            print(f"⏱ Kamera L: {dt_left:.1f} ms, R: {dt_right:.1f} ms, Δ celkem: {dt_total:.1f} ms")
-
             if retL and retR:
                 frameL = cv2.rotate(frameL, cv2.ROTATE_90_CLOCKWISE)
                 frameL = frameL[150:-165, :]
                 frameR = cv2.rotate(frameR, cv2.ROTATE_90_COUNTERCLOCKWISE)
                 frameR = frameR[150:-165, :]
 
-                with frame_lock:
-                    latest_left = frameL.copy()
-                    latest_right = frameR.copy()
-                    frame_event_log.set()
-                    frame_event_qr.set()
+                same = (id(frameL) == prev_id)
+                prev_id = id(frameL)
+
+                print(f"⏱ Kamera L: {dt_left:.1f} ms, R: {dt_right:.1f} ms, Δ celkem: {dt_total:.1f} ms,  🔢 id = {id(frameL):#x}   stejné_jako_předchozí? {same}")
+
+                with frame_cond:                       # získá zámek ↓
+                    left_buf.append(frameL)     # uloží do bufferu
+                    right_buf.append(frameR)
+                    frame_seq += 1        # 🔢 nový snímek → posuň čítač
+                    frame_cond.notify_all()            # probudí všechna čekající vlákna
+
+                # with frame_lock:
+                #     latest_left = frameL.copy()
+                #     latest_right = frameR.copy()
+                #     frame_event_log.set()
+                #     frame_event_qr.set()
 
             time.sleep(1.0) #pauza mezi snímky
 
