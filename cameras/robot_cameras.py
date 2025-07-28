@@ -27,11 +27,6 @@ log_running = False
 loop_thread = None
 log_thread = None
 
-
-# Sdílené snímky z kamer
-# latest_left = None
-# latest_right = None
-
 # kruhové buffery pro levý/pravý obraz
 left_buf  = deque(maxlen=BUFFER_SIZE)
 right_buf = deque(maxlen=BUFFER_SIZE)
@@ -41,11 +36,6 @@ frame_seq = 0
 
 # Condition (obsahuje interní Lock)
 frame_cond = Condition()
-
-# Synchronizace mezi smyčkami
-# frame_lock = threading.Lock()
-# frame_event_log = threading.Event()
-# frame_event_qr = threading.Event()
 
 #promenne ke QR kodu
 qr_running = False
@@ -128,8 +118,6 @@ def handle_client(conn, addr):
 
                         if log_running:
                             log_running = False
-                            #frame_event_log.set()  # probudí vlákno, aby se ukončilo
-                            #frame_event_qr.set()  # probudí vlákno, aby se ukončilo
                             conn.sendall(b"LOG STOP\n")
                         else:
                             conn.sendall(b"LOG NOTRUN\n")
@@ -190,24 +178,12 @@ def qr_worker():
     global shutdown_flag, qr_result, qr_ready, qr_lock, qr_running
     global frame_cond, right_buf, frame_seq
     global loop_running
-    #frame_event_qr, latest_right, qr_lock, qr_running
 
     deadline = time.time() + 120
     qr_result = None
     last_seq = 0
-    #frame_event_qr.clear()
 
     while time.time() < deadline and not shutdown_flag and loop_running:
-        # with frame_cond:
-        #     frame_cond.wait(timeout=10)
-        #     if not right_buf:
-        #         continue
-        #     latest = right_buf[-1]
-
-        # if frame_event_qr.wait(timeout=10):
-        #     frame_event_qr.clear()
-        #     if latest_right is None:
-        #         continue
 
         with frame_cond:
             frame_cond.wait_for(lambda: frame_seq > last_seq or not shutdown_flag, timeout=2)
@@ -258,8 +234,6 @@ def start_server():
         server.close()
         log_running=False
         loop_running=False
-        #frame_event_qr.set()
-        #frame_event_log.set()  
         time.sleep(0.1)
         print("🛑 Port uvolněn, server ukončen")
 
@@ -282,8 +256,6 @@ def log_loop_thread():
 
     while log_running and not shutdown_flag:
         with frame_cond:
-            #frame_event_log.wait(timeout=5.0)  # počká na nový snímek (nebo každých 5s)
-            #frame_cond.wait(timeout=5.0)  # uspí vlákno, dokud není notify_all()
             frame_cond.wait_for(lambda: frame_seq > last_seq or not log_running, timeout=2)
 
             if frame_seq == last_seq: # timeout bez nového snímku
@@ -292,10 +264,6 @@ def log_loop_thread():
 
             left  = left_buf[-1]  # vždy vezmeme NEJNOVĚJŠÍ snímek
             right = right_buf[-1]
-            # with frame_lock:
-            #     left = latest_left.copy() if latest_left is not None else None
-            #     right = latest_right.copy() if latest_right is not None else None
-            #     frame_event_log.clear()
 
         if left is not None and right is not None:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -345,17 +313,11 @@ def camera_loop_thread():
 
                 print(f"⏱ Kamera L: {dt_left:.1f} ms, R: {dt_right:.1f} ms, Δ celkem: {dt_total:.1f} ms,  🔢 id = {id(frameL):#x}   stejné_jako_předchozí? {same}")
 
-                with frame_cond:                       # získá zámek ↓
+                with frame_cond:                # získá zámek ↓
                     left_buf.append(frameL)     # uloží do bufferu
                     right_buf.append(frameR)
-                    frame_seq += 1        # 🔢 nový snímek → posuň čítač
-                    frame_cond.notify_all()            # probudí všechna čekající vlákna
-
-                # with frame_lock:
-                #     latest_left = frameL.copy()
-                #     latest_right = frameR.copy()
-                #     frame_event_log.set()
-                #     frame_event_qr.set()
+                    frame_seq += 1              # nový snímek → posuň čítač
+                    frame_cond.notify_all()     # probudí všechna čekající vlákna
 
             time.sleep(1.0) #pauza mezi snímky
 
