@@ -20,6 +20,8 @@ import asyncio
 import datetime
 
 from starlette.middleware.base import BaseHTTPMiddleware
+from sse_starlette.sse import EventSourceResponse
+
 
 class NoCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -126,6 +128,19 @@ async def lidar_action(action: str):
         return {"action":action, "response":resp}
     except Exception as e:
         return JSONResponse(status_code=500, content={"error":str(e)})    
+
+@app.get("/lidar_stream")
+async def lidar_stream():
+    async def event_generator():
+        try:
+            while True:
+                resp = await asyncio.to_thread(send_lidar, "DISTANCE")
+                yield f"data: {resp}\n\n"
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            print("🛑 SSE klient odpojen")
+            return
+    return EventSourceResponse(event_generator())
 
 ### CAMERA TEST ###
 

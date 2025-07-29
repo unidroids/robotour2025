@@ -55,6 +55,8 @@
             <button onclick="lidarCmd('status')">Status</button>
             <button onclick="lidarCmd('start')">Start</button>
             <button onclick="lidarCmd('distance')">Vzdálenost</button>
+            <button onclick="startLidarStream()">🔁 Stream</button>
+            <button onclick="stopLidarStream()">⏹ Stop Stream</button>
             <button onclick="lidarCmd('stop')">Stop</button>
             <hr />
             <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>
@@ -62,6 +64,35 @@
     </div>
 
     <script>
+        let eventSource = null;
+
+        function startLidarStream() {
+            if (eventSource) {
+                logOutput("⚠️ Stream už běží");
+                return;
+            }
+
+            eventSource = new EventSource("/lidar_stream");
+            eventSource.onmessage = function (event) {
+                logOutput("📡 " + event.data);
+            };
+            eventSource.onerror = function () {
+                logOutput("❌ Chyba ve streamu");
+                eventSource.close();
+                eventSource = null;
+            };
+        }
+
+        function stopLidarStream() {
+            if (eventSource) {
+                eventSource.close();
+                eventSource = null;
+                logOutput("🛑 Stream zastaven");
+            } else {
+                logOutput("⚠️ Stream neběží");
+            }
+        }
+
         function updateSizeInfo() {
             const info = [
                 `window.innerWidth: ${window.innerWidth}`,
