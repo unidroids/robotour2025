@@ -1,10 +1,15 @@
 // lidar_controller.hpp — řadič Unitree L2 LiDARu (SDK2)
-// ---------------------------------------------------------
-// Rev.7 + PLY logování
-// • Přidán PLYLogger ⇒ každých 10 s se zapisují přijímané cloudy do
-//   /data/lidar/cloud_YYYYMMDD_HHMMSS.ply
-// • V loopRead() se každý načtený cloud rovnou pushuje do loggeru.
-// ---------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Rev.8
+// • Dva PLY loggery:
+//     raw_logger_  → /data/robot/lidar/cloud_*.ply (syrový cloud)
+//     proc_logger_ → /data/robot/lidar/trans_*.ply (transform + ořez)
+// • loopRead():
+//     1. uloží syrový cloud (raw_logger_)
+//     2. vytvoří transformovaný cloud (pointproc::transformCloud)
+//     3. uloží transformovaný cloud (proc_logger_)
+//     4. minimum počítá z transformovaného cloudu (pointproc::minDistance)
+// ---------------------------------------------------------------------------
 
 #pragma once
 
@@ -21,13 +26,18 @@
 #include "unitree_lidar_protocol.h"
 
 #include "point_processing.hpp"
-#include "ply_logger.hpp"            //  <<< nově
+#include "ply_logger.hpp"
 
 namespace unilidar = unilidar_sdk2;
 
 class LidarController {
 public:
-    LidarController() : logger_("/data/robot/lidar") { resetDistance(); }
+    LidarController()
+        : raw_logger_("/data/robot/lidar", "cloud_"),
+          proc_logger_("/data/robot/lidar", "trans_")
+    {
+        resetDistance();
+    }
     ~LidarController() { stop(); }
 
     bool start() {
@@ -56,14 +66,11 @@ public:
 
             reader_->startLidarRotation();
 
-            // --- FLUSH 2 sekundy ------------------------------------------------
+            // flush 2 s
             auto t_end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            while (std::chrono::steady_clock::now() < t_end) {
-                reader_->runParse();
-            }
+            while (std::chrono::steady_clock::now() < t_end) reader_->runParse();
             reader_->clearBuffer();
             resetDistance();
-            // -------------------------------------------------------------------
 
             running_ = true;
             worker_ = std::thread(&LidarController::loopRead, this);
@@ -79,7 +86,6 @@ public:
         std::lock_guard<std::mutex> lg(mtx_);
         if (!running_) return;
         running_ = false;
-
         if (worker_.joinable()) worker_.join();
         try { reader_->stopLidarRotation(); } catch (...) {}
         resetDistance();
@@ -108,11 +114,16 @@ private:
             if (pkt == LIDAR_POINT_DATA_PACKET_TYPE) {
                 unilidar::PointCloudUnitree cloud;
                 if (reader_->getPointCloud(cloud)) {
-                    // >>> log cloud
-                    logger_.push(cloud);
+                    // --- RAW log ---
+                    raw_logger_.push(cloud);
 
-                    float cloud_min = pointproc::minDistanceTransformed(cloud);
-                    if (cloud_min < rev_min) rev_min = cloud_min;
+                    // --- Transformace + log ---
+                    auto proc = pointproc::transformCloud(cloud);
+                    proc_logger_.push(proc);
+
+                    float cloud_min = pointproc::minDistance(proc);
+                    if (cloud_min >= 0 && cloud_min < rev_min) rev_min = cloud_min;
+
                     if (++clouds >= REV_CLOUDS) {
                         latest_.store(rev_min);
                         seq_.fetch_add(1);
@@ -129,7 +140,8 @@ private:
 
     std::unique_ptr<unilidar::UnitreeLidarReader, RD> reader_;
     std::thread worker_;
-    PLYLogger   logger_;                 //  <<< nově
+    PLYLogger raw_logger_;   // syrový cloud
+    PLYLogger proc_logger_;  // transformovaný cloud
 
     std::atomic<bool>     running_{false};
     std::atomic<float>    latest_;

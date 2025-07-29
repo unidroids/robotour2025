@@ -1,8 +1,6 @@
 // ply_logger.hpp — asynchronní logger point‑cloudů do PLY po 10 s blocích
 // --------------------------------------------------------------------------
-// • push(cloud) jen ukládá do bufferu a upozorní vlákno (kvůli shutdownu).
-// • Worker každou 1 s kontroluje, zda uplynulo FLUSH_INTERVAL (10 s)
-//   od posledního zápisu. Pak vyprázdní buffer do nového souboru.
+// Nové: možnost vlastního prefixu (cloud_, trans_, …)
 // --------------------------------------------------------------------------
 #pragma once
 #include <filesystem>
@@ -18,8 +16,10 @@
 
 class PLYLogger {
 public:
-    explicit PLYLogger(const std::string &dir)
-        : directory_(dir), running_(true), last_flush_(std::chrono::steady_clock::now()) {
+    // dir  … cílový adresář
+    // pref … prefix názvu souboru (např. "cloud_" nebo "trans_")
+    explicit PLYLogger(const std::string &dir, std::string pref = "cloud_")
+        : directory_(dir), prefix_(std::move(pref)), running_(true), last_flush_(std::chrono::steady_clock::now()) {
         std::filesystem::create_directories(directory_);
         worker_ = std::thread(&PLYLogger::loop, this);
     }
@@ -28,7 +28,7 @@ public:
     void push(const unilidar_sdk2::PointCloudUnitree &cloud) {
         std::lock_guard<std::mutex> lg(mtx_);
         buffer_.push_back(cloud);
-        cv_.notify_one();          // pro rychlé ukončení
+        cv_.notify_one();
     }
 
     void stop() {
@@ -38,7 +38,7 @@ public:
     }
 
 private:
-    static std::string timestamp() {
+    static std::string ts_now() {
         auto t = std::chrono::system_clock::now();
         std::time_t tt = std::chrono::system_clock::to_time_t(t);
         std::tm tm = *std::localtime(&tt);
@@ -50,7 +50,7 @@ private:
     void writePLY(const std::vector<unilidar_sdk2::PointCloudUnitree> &clouds) {
         size_t total = 0; for (auto &c:clouds) total += c.points.size();
         if (total==0) return;
-        std::string fname = directory_ + "/cloud_" + timestamp() + ".ply";
+        std::string fname = directory_ + "/" + prefix_ + ts_now() + ".ply";
         FILE *f = std::fopen(fname.c_str(), "w"); if (!f) return;
         std::fprintf(f,"ply\nformat ascii 1.0\n");
         std::fprintf(f,"element vertex %zu\n", total);
@@ -61,6 +61,7 @@ private:
             }
         }
         std::fclose(f);
+        std::cout << "[ply_logger] saved " << fname.c_str() << std::endl;
     }
 
     void loop() {
@@ -68,7 +69,7 @@ private:
         constexpr auto FLUSH_INTERVAL = seconds(10);
         while (running_) {
             std::unique_lock<std::mutex> lk(mtx_);
-            cv_.wait_for(lk, seconds(1));          // wake každý 1 s nebo při push
+            cv_.wait_for(lk, seconds(1));
             auto now = steady_clock::now();
             if (now - last_flush_ >= FLUSH_INTERVAL && !buffer_.empty()) {
                 std::vector<unilidar_sdk2::PointCloudUnitree> local;
@@ -78,12 +79,13 @@ private:
                 last_flush_ = now;
             }
         }
-        // flush zbytek při stop
+        // flush při stop
         std::lock_guard<std::mutex> lg(mtx_);
         if (!buffer_.empty()) writePLY(buffer_);
     }
 
     std::string directory_;
+    std::string prefix_;
     std::atomic<bool> running_;
     std::thread worker_;
 
