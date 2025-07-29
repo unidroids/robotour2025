@@ -1,10 +1,14 @@
-// robot_lidar_tcp.cpp — minimální TCP socket služba pro Robotour LiDAR
+// robot_lidar_tcp.cpp — TCP služba pro Robotour LiDAR
 // -----------------------------------------------------------------
-// • Poslouchá POUZE na 127.0.0.1:9002 (plain TCP, žádný WebSocket)
+// • Poslouchá POUZE na 127.0.0.1:9002 (plain TCP)
 // • Příkazy: PING, START, STOP, DISTANCE, EXIT, SHUTDOWN
-// • SHUTDOWN nyní korektně zavírá posluchač (accept skončí)
+// • START/STOP volají LidarController (globální instance)
+// • DISTANCE vrací poslední minimální vzdálenost z LiDARu
+// • Všechny příkazy se logují na stdout
 // • Build: g++ -std=c++17 -pthread robot_lidar_tcp.cpp -o robot_lidar_tcp
 // -----------------------------------------------------------------
+
+#include "lidar_controller.hpp"   // náš wrapper
 
 #include <atomic>
 #include <cerrno>
@@ -13,27 +17,37 @@
 #include <iostream>
 #include <mutex>
 #include <netinet/in.h>
-#include <arpa/inet.h>      // inet_pton
+#include <arpa/inet.h>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
 #include <vector>
-#include <algorithm>        // std::remove
+#include <algorithm>
 
 constexpr uint16_t kPort = 9002;
 constexpr const char *kBindAddr = "127.0.0.1";
 
+// ------------------------------------------------------
+// Globální stav
+// ------------------------------------------------------
+static LidarController lidar;          // jediná instance (safe)
 std::atomic<bool> shutting_down{false};
-std::atomic<bool> lidar_running{false};
-std::atomic<float> last_distance{9999.0f};
-std::atomic<int>   listen_fd{-1};          // abychom jej mohli zavřít z libovolného threadu
+std::atomic<int>  listen_fd{-1};
 
 std::mutex clients_mtx;
 std::vector<int> client_socks;
 
+// ------------------------------------------------------
+// Utility
+// ------------------------------------------------------
+void send_line(int sock, const std::string &msg) {
+    std::string out = msg + "\n";
+    ::send(sock, out.data(), out.size(), MSG_NOSIGNAL);
+}
+
 void close_all_clients() {
-    std::lock_guard<std::mutex> lock(clients_mtx);
+    std::lock_guard<std::mutex> lg(clients_mtx);
     for (int s : client_socks) {
         ::shutdown(s, SHUT_RDWR);
         ::close(s);
@@ -43,20 +57,15 @@ void close_all_clients() {
 
 void stop_listener() {
     int fd = listen_fd.exchange(-1);
-    if (fd >= 0) {
-        ::shutdown(fd, SHUT_RDWR); // přeruší blocking accept()
-        ::close(fd);
-    }
+    if (fd >= 0) { ::shutdown(fd, SHUT_RDWR); ::close(fd); }
 }
 
-void send_line(int sock, const std::string &msg) {
-    std::string to_send = msg + "\n";
-    ::send(sock, to_send.data(), to_send.size(), MSG_NOSIGNAL);
-}
-
+// ------------------------------------------------------
+// Vlákno pro každého klienta
+// ------------------------------------------------------
 void handle_client(int sock) {
     {
-        std::lock_guard<std::mutex> lock(clients_mtx);
+        std::lock_guard<std::mutex> lg(clients_mtx);
         client_socks.push_back(sock);
     }
 
@@ -66,7 +75,7 @@ void handle_client(int sock) {
 
     while (!shutting_down.load()) {
         ssize_t n = ::recv(sock, tmp, sizeof(tmp), 0);
-        if (n <= 0) break; // client closed or error
+        if (n <= 0) break; // klient zavřel
         buffer.append(tmp, n);
 
         size_t pos;
@@ -75,16 +84,18 @@ void handle_client(int sock) {
             buffer.erase(0, pos + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
+            std::cout << "CMD(" << sock << "): " << line << std::endl;
+
             if (line == "PING") {
                 send_line(sock, "PONG");
             } else if (line == "START") {
-                lidar_running.store(true);
-                send_line(sock, "OK STARTED");
+                bool ok = lidar.start();
+                send_line(sock, ok ? "OK STARTED" : "ERR START");
             } else if (line == "STOP") {
-                lidar_running.store(false);
+                lidar.stop();
                 send_line(sock, "OK STOPPED");
             } else if (line == "DISTANCE") {
-                send_line(sock, std::to_string(last_distance.load()));
+                send_line(sock, std::to_string(lidar.lastDistance()));
             } else if (line == "EXIT") {
                 send_line(sock, "BYE");
                 ::shutdown(sock, SHUT_RDWR);
@@ -92,7 +103,8 @@ void handle_client(int sock) {
             } else if (line == "SHUTDOWN") {
                 send_line(sock, "SHUTTING DOWN");
                 shutting_down.store(true);
-                stop_listener();        // přeruší accept()
+                lidar.stop();
+                stop_listener();
                 break;
             } else {
                 send_line(sock, "ERR UNKNOWN COMMAND");
@@ -102,38 +114,34 @@ void handle_client(int sock) {
 
     ::close(sock);
     {
-        std::lock_guard<std::mutex> lock(clients_mtx);
+        std::lock_guard<std::mutex> lg(clients_mtx);
         client_socks.erase(std::remove(client_socks.begin(), client_socks.end(), sock), client_socks.end());
     }
 }
 
+// ------------------------------------------------------
+// main()
+// ------------------------------------------------------
 int main() {
-    signal(SIGINT, [](int) {
-        shutting_down.store(true);
-        stop_listener();
-    });
+    signal(SIGINT, [](int){ shutting_down.store(true); stop_listener(); });
 
     int listen_sock = ::socket(AF_INET, SOCK_STREAM, 0);
     if (listen_sock < 0) { std::perror("socket"); return 1; }
-    listen_fd = listen_sock;          // uložíme pro jiné thready
+    listen_fd = listen_sock;
 
     sockaddr_in addr{}; addr.sin_family = AF_INET; addr.sin_port = htons(kPort);
     if (inet_pton(AF_INET, kBindAddr, &addr.sin_addr) <= 0) { std::perror("inet_pton"); return 1; }
-
-    int opt = 1; setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (bind(listen_sock, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) { std::perror("bind"); return 1; }
-    if (listen(listen_sock, 8) < 0) { std::perror("listen"); return 1; }
+    int opt=1; setsockopt(listen_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (bind(listen_sock, (sockaddr*)&addr, sizeof(addr))<0){ std::perror("bind"); return 1; }
+    if (listen(listen_sock, 8)<0){ std::perror("listen"); return 1; }
 
     std::cout << "📡 robot-lidar TCP server naslouchá na " << kBindAddr << ":" << kPort << std::endl;
 
     while (!shutting_down.load()) {
-        sockaddr_in cli_addr{}; socklen_t cli_len = sizeof(cli_addr);
-        int client_sock = accept(listen_sock, reinterpret_cast<sockaddr *>(&cli_addr), &cli_len);
-        if (client_sock < 0) {
-            if (shutting_down.load()) break; // listener byl zavřen
-            std::perror("accept"); continue;
-        }
-        std::thread(handle_client, client_sock).detach();
+        sockaddr_in cli{}; socklen_t len=sizeof(cli);
+        int cs = accept(listen_sock, (sockaddr*)&cli, &len);
+        if (cs<0){ if (shutting_down.load()) break; std::perror("accept"); continue; }
+        std::thread(handle_client, cs).detach();
     }
 
     close_all_clients();
@@ -147,5 +155,6 @@ project(robot_lidar_tcp)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 add_executable(robot_lidar_tcp robot_lidar_tcp.cpp)
+# Později přidáme knihovny SDK: target_link_libraries(robot_lidar_tcp PRIVATE unilidar_sdk2 pthread)
 target_link_libraries(robot_lidar_tcp PRIVATE pthread)
 */
