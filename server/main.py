@@ -93,62 +93,50 @@ async def info():
         "cpu_count": os.cpu_count()
     }
 
+### LIDAR TEST ###
+
 @app.get("/lidar_test")
-async def lidar_test():
-    log_path = "/data/logs/fastapi/lidar_test.log"
-    binary = "/opt/projects/robotour/unitree_lidar_sdk/bin/example_lidar_udp"
-    start_time = datetime.datetime.now().isoformat()
+async def lidar_test_page():
+    return FileResponse("/opt/projects/robotour/server/static/lidar_test.html")
 
-    async def run_lidar():
-        try:
-            with open(log_path, "a") as f:
-                f.write(f"\n[{start_time}] Spouštím {binary}...\n")
-            proc = await asyncio.create_subprocess_exec(
-                binary,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await proc.communicate()
-            end_time = datetime.datetime.now().isoformat()
+LIDAR_HOST = "127.0.0.1"
+LIDAR_PORT = 9002
 
-            with open(log_path, "a") as f:
-                f.write(f"[{end_time}] Dokončeno, návratový kód {proc.returncode}\n")
-                f.write(stdout.decode() if stdout else "")
-                f.write(stderr.decode() if stderr else "")
-        except Exception as e:
-            with open(log_path, "a") as f:
-                f.write(f"[chyba] {str(e)}\n")
+LIDAR_CMD_MAP = {
+    "status"    : "PING",   # služba vrátí PONG
+    "start"     : "START",
+    "stop"      : "STOP",
+    "distance"  : "DISTANCE",
+}
 
-    # Spusť proces na pozadí (nebude čekat na dokončení)
-    asyncio.create_task(run_lidar())
+def send_lidar(cmd: str, timeout=150) -> str:
+    with socket.create_connection((LIDAR_HOST, LIDAR_PORT), timeout=timeout) as s:
+        s.sendall((cmd+"\n").encode())
+        data = s.recv(4096)
+    return data.decode(errors="ignore").strip()
 
-    return {"status": "lidar test started", "path": binary}
+@app.get("/lidar/{action}")
+async def lidar_action(action: str):
+    action = action.lower()
+    if action not in LIDAR_CMD_MAP:
+        return JSONResponse(status_code=400, content={"error":"bad action"})
+    try:
+        # spustíme blokující volání v thread-poolu, aby neblokovalo event-loop
+        resp = await asyncio.to_thread(send_lidar, LIDAR_CMD_MAP[action])
+        return {"action":action, "response":resp}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error":str(e)})    
+
+### CAMERA TEST ###
 
 @app.get("/camera_test")
 async def camera_test_page():
     return FileResponse("/opt/projects/robotour/server/static/camera_test.html")
 
-
-@app.get("/camera/{action}")
-async def camera_action(action: str):
-    action = action.lower()
-    if action not in CMD_MAP:
-        return JSONResponse(status_code=400, content={"error":"bad action"})
-    try:
-        # spustíme blokující volání v thread-poolu, aby neblokovalo event-loop
-        resp = await asyncio.to_thread(send_cam, CMD_MAP[action])
-        return {"action":action, "response":resp}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error":str(e)})    
-
-
-
-
-
 CAM_HOST = "127.0.0.1"
 CAM_PORT = 9001
 
-CMD_MAP = {
+CAM_CMD_MAP = {
     "status": "PING",   # kamerová služba vrátí PONG
     "start" : "RUN",
     "stop"  : "STOP",
@@ -157,9 +145,24 @@ CMD_MAP = {
     "rcam"  : "RCAM",
 }
 
+
 def send_cam(cmd: str, timeout=150) -> str:
     with socket.create_connection((CAM_HOST, CAM_PORT), timeout=timeout) as s:
         s.sendall((cmd+"\n").encode())
         data = s.recv(4096)
     return data.decode(errors="ignore").strip()
+
+
+@app.get("/camera/{action}")
+async def camera_action(action: str):
+    action = action.lower()
+    if action not in CAM_CMD_MAP:
+        return JSONResponse(status_code=400, content={"error":"bad action"})
+    try:
+        # spustíme blokující volání v thread-poolu, aby neblokovalo event-loop
+        resp = await asyncio.to_thread(send_cam, CAM_CMD_MAP[action])
+        return {"action":action, "response":resp}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error":str(e)})    
+
 

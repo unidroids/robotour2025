@@ -103,7 +103,7 @@
                 const r = await fetch(`/camera/${cmd}`);
                 if (!r.ok) throw new Error(await r.text());
                 const data = await r.json();
-                log(JSON.stringify(data, null, 2));
+                log(`✅ Odpověď na  ${cmd}:\n` + JSON.stringify(data, null, 2));
 
                 // pro streamovací příkazy přepni <img> na příslušný endpoint
                 if (cmd === 'lcam' || cmd === 'rcam') {

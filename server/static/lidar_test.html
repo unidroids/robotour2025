@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Robotour Servisní Panel</title>
+    <title>Robotour - Lidar Test</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         html,
@@ -50,14 +50,14 @@
 
 <body>
     <div id="wrapper">
-        <div id="output">Výstup – připraven</div>
+        <div id="output">Lidar Test - Výstup připraven</div>
         <div id="controls">
-            <button onclick="callEndpoint('info')">Získat info</button>
-            <button onclick="location.href='/camera_test'">Kamera Test</button>
-            <button onclick="location.href='/lidar_test'">Lidar Test</button>
-            <button onclick="location.href='/demo'">Demo</button>
-            <button onclick="callEndpoint('shutdown', 'POST')">Vypnout</button>
-            <button onclick="forceFullScreenLayout()">Znovu vynutit velikost</button>
+            <button onclick="lidarCmd('status')">Status</button>
+            <button onclick="lidarCmd('start')">Start</button>
+            <button onclick="lidarCmd('distance')">Vzdálenost</button>
+            <button onclick="lidarCmd('stop')">Stop</button>
+            <hr />
+            <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>
         </div>
     </div>
 
@@ -70,7 +70,7 @@
                 `clientHeight: ${document.documentElement.clientHeight}`
             ].join('\n');
 
-            logOutput("🧭 Rozměry:\n" + info);
+            //logOutput("🧭 Rozměry:\n" + info);
         }
 
         function forceFullScreenLayout() {
@@ -83,16 +83,14 @@
             updateSizeInfo();
         }
 
-        async function callEndpoint(endpoint, method = 'GET') {
+        async function lidarCmd(cmd) {
             try {
-                const res = await fetch(`/${endpoint}`, {
-                    method,
-                    headers: { "Content-Type": "application/json" }
-                });
-                const data = await res.json();
-                logOutput(`✅ Odpověď z /${endpoint}:\n` + JSON.stringify(data, null, 2));
-            } catch (err) {
-                logOutput(`❌ Chyba při volání /${endpoint}:\n` + err);
+                const r = await fetch(`/lidar/${cmd}`);
+                if (!r.ok) throw new Error(await r.text());
+                const data = await r.json();
+                logOutput(`✅ Odpověď na ${cmd}:\n` + JSON.stringify(data, null, 2));
+            } catch (e) {
+                logOutput("❌ " + e.message);
             }
         }
 
