@@ -9,6 +9,9 @@ chmod 664 /data/logs/fastapi/fastapi.log
 touch /data/logs/fastapi/zeroconf.log
 chmod 664 /data/logs/fastapi/zeroconf.log
 
+touch /data/logs/fastapi/cameras.log
+chmod 664 /data/logs/fastapi/cameras.log
+
 # installace
 chmod +x register_fastapi.sh unregister_fastapi.sh
 ./register_fastapi.sh
@@ -18,6 +21,9 @@ chmod +x register_zeroconf.sh unregister_zeroconf.sh
 ./register_zeroconf.sh
 systemctl status zeroconf
 
+chmod +x register_camera_service.sh unregister_camera_service.sh
+./register_camera_service.sh
+systemctl status robot-cameras
 
 # uninstallace
 ./unregister_fastapi.sh 
@@ -26,9 +32,11 @@ systemctl status zeroconf
 # status
 systemctl status fastapi-server
 systemctl status zeroconf
+systemctl status robot-cameras
 
 # restart
 sudo systemctl restart fastapi-server
+sudo systemctl restart robot-cameras
 
 # vypis
 nano /data/logs/fastapi/fastapi.log 
@@ -36,3 +44,8 @@ tail -f /data/logs/fastapi/fastapi.log
 
 nano /data/logs/fastapi/zeroconf.log
 tail -f /data/logs/fastapi/zeroconf.log
+
+nano /data/logs/camera/cameras.log
+tail -f /data/logs/camera/cameras.log
+
+

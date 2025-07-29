@@ -1,33 +1,44 @@
-ZEROCONF_SERVICE="/etc/systemd/system/zeroconf.service"
-ZEROCONF_LOG="/data/logs/fastapi/zeroconf.log"
+#!/bin/bash
+set -e
 
-echo "Creating log file for zeroconf..."
-mkdir -p /data/logs/fastapi
-touch $ZEROCONF_LOG
-chmod 664 $ZEROCONF_LOG
+SERVICE_FILE="/etc/systemd/system/zeroconf.service"
+LOG_DIR="/robot/data/logs/fastapi"
+LOG_FILE="$LOG_DIR/zeroconf.log"
 
-echo "Creating Zeroconf systemd service..."
+echo "📁 Creating log directory..."
+sudo mkdir -p "$LOG_DIR"
+sudo touch "$LOG_FILE"
+sudo chmod 664 "$LOG_FILE"
 
-sudo tee $ZEROCONF_SERVICE > /dev/null <<EOF
+echo "🛠  Creating systemd service zeroconf.service"
+
+sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
 Description=Zeroconf (Bonjour) publisher for FastAPI
-After=network.target
+After=network.target fastapi-server.service
 Requires=fastapi-server.service
 
 [Service]
 User=user
 WorkingDirectory=/opt/projects/robotour/server
-ExecStart=/bin/bash -c '/opt/projects/robotour/venv-robotour/bin/python bojour.py >> $ZEROCONF_LOG 2>&1'
+
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/projects/robotour/venv-robotour/bin/python bonjour.py
+
+StandardOutput=append:$LOG_FILE
+StandardError=append:$LOG_FILE
+
 Restart=always
 RestartSec=2
-StandardOutput=append:$ZEROCONF_LOG
-StandardError=append:$ZEROCONF_LOG
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-echo "Enabling Zeroconf service..."
+echo "🔄 Reloading and enabling zeroconf.service..."
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable --now zeroconf.service
+
+echo "✅ Zeroconf service running. View logs with:"
+echo "   tail -f $LOG_FILE"
