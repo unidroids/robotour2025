@@ -7,4 +7,5 @@ include_directories(${CMAKE_SOURCE_DIR}/unitree_lidar_sdk/include)
 link_directories(${CMAKE_SOURCE_DIR}/unitree_lidar_sdk/lib/${CMAKE_SYSTEM_PROCESSOR})
 add_executable(robot_lidar_tcp robot_lidar_tcp.cpp)
 target_link_libraries(robot_lidar_tcp PRIVATE pthread unilidar_sdk2)
+target_include_directories(robot_lidar_tcp PRIVATE /usr/include/eigen3)
 

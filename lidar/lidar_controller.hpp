@@ -21,7 +21,7 @@
 #include "unitree_lidar_sdk.h"
 #include "unitree_lidar_protocol.h"
 
-//#include "point_processing.hpp"
+#include "point_processing.hpp"
 
 namespace unilidar = unilidar_sdk2;
 
@@ -88,7 +88,7 @@ public:
     }
 
     bool getDistance(uint64_t &seq_out, float &dist_out) const {
-        //std::cout << "[getDistance] seq=" << seq_.load() << " min=" << latest_.load() << " m" << std::endl;
+        std::cout << "[getDistance] seq=" << seq_.load() << " min=" << latest_.load() << " m" << std::endl;
         seq_out = seq_.load();
         if (seq_out == 0 || running_ == false) return false;
         dist_out = latest_.load();
@@ -102,7 +102,7 @@ private:
     }
 
     void loopRead() {
-        const int REV_CLOUDS = 3;
+        const int REV_CLOUDS = 6;
         float rev_min = std::numeric_limits<float>::infinity();
         int   clouds  = 0;
         while (running_) {
@@ -110,11 +110,7 @@ private:
             if (pkt == LIDAR_POINT_DATA_PACKET_TYPE) {
                 unilidar::PointCloudUnitree cloud;
                 if (reader_->getPointCloud(cloud)) {
-                    float cloud_min = std::numeric_limits<float>::infinity();
-                    for (const auto &pt : cloud.points) {
-                        float d = std::sqrt(pt.x*pt.x + pt.y*pt.y + pt.z*pt.z);
-                        if (d < cloud_min) cloud_min = d;
-                    }
+                    float cloud_min = pointproc::minDistanceTransformed(cloud);
                     if (cloud_min < rev_min) rev_min = cloud_min;
                     if (++clouds >= REV_CLOUDS) {
                         latest_.store(rev_min);
