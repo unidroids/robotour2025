@@ -1,10 +1,9 @@
 // lidar_controller.hpp — řadič Unitree L2 LiDARu (SDK2)
 // ---------------------------------------------------------
-// Rev.6 – Jednorázová inicializace UDP + 2 s vyčerpání bufferu
-// • `reader_` se vytváří jen poprvé. Port zůstává otevřený.
-// • Každý `START` po roztočení LiDARu volá 2 s "flush", která opakovaně
-//   čte `runParse()` a zahazuje data ➜ fronta kernelu i dekodéru se vyčistí.
-// • Teprve poté se spustí `worker_` vlákno.
+// Rev.7 + PLY logování
+// • Přidán PLYLogger ⇒ každých 10 s se zapisují přijímané cloudy do
+//   /data/lidar/cloud_YYYYMMDD_HHMMSS.ply
+// • V loopRead() se každý načtený cloud rovnou pushuje do loggeru.
 // ---------------------------------------------------------
 
 #pragma once
@@ -22,12 +21,13 @@
 #include "unitree_lidar_protocol.h"
 
 #include "point_processing.hpp"
+#include "ply_logger.hpp"            //  <<< nově
 
 namespace unilidar = unilidar_sdk2;
 
 class LidarController {
 public:
-    LidarController() { resetDistance(); }
+    LidarController() : logger_("/data/robot/lidar") { resetDistance(); }
     ~LidarController() { stop(); }
 
     bool start() {
@@ -35,9 +35,8 @@ public:
         if (running_) { std::cout << "[LIDAR] already running" << std::endl; return true; }
 
         try {
-            resetDistance();             // údaje budou nové až od workeru
+            resetDistance();
             if (!reader_) {
-                // --- PRVNÍ SPUŠTĚNÍ: vytvoř reader & inicializuj UDP ---
                 reader_.reset(unilidar::createUnitreeLidarReader());
                 if (!reader_) throw std::runtime_error("factory returned nullptr");
 
@@ -60,10 +59,10 @@ public:
             // --- FLUSH 2 sekundy ------------------------------------------------
             auto t_end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
             while (std::chrono::steady_clock::now() < t_end) {
-                reader_->runParse();    // ignorujeme návratovou hodnotu
+                reader_->runParse();
             }
-            reader_->clearBuffer();      // pro jistotu vynuluj dekodér
-            resetDistance();             // údaje budou nové až od workeru
+            reader_->clearBuffer();
+            resetDistance();
             // -------------------------------------------------------------------
 
             running_ = true;
@@ -81,16 +80,15 @@ public:
         if (!running_) return;
         running_ = false;
 
-        if (worker_.joinable()) worker_.join();   // nevolá reader po join
+        if (worker_.joinable()) worker_.join();
         try { reader_->stopLidarRotation(); } catch (...) {}
         resetDistance();
         std::cout << "[LIDAR] stopped" << std::endl;
     }
 
     bool getDistance(uint64_t &seq_out, float &dist_out) const {
-        std::cout << "[getDistance] seq=" << seq_.load() << " min=" << latest_.load() << " m" << std::endl;
         seq_out = seq_.load();
-        if (seq_out == 0 || running_ == false) return false;
+        if (seq_out == 0 || !running_) return false;
         dist_out = latest_.load();
         return true;
     }
@@ -110,12 +108,14 @@ private:
             if (pkt == LIDAR_POINT_DATA_PACKET_TYPE) {
                 unilidar::PointCloudUnitree cloud;
                 if (reader_->getPointCloud(cloud)) {
+                    // >>> log cloud
+                    logger_.push(cloud);
+
                     float cloud_min = pointproc::minDistanceTransformed(cloud);
                     if (cloud_min < rev_min) rev_min = cloud_min;
                     if (++clouds >= REV_CLOUDS) {
                         latest_.store(rev_min);
-                        uint64_t newSeq = seq_.fetch_add(1) + 1;
-                        //std::cout << "[loopRead] seq=" << newSeq << " min=" << rev_min << " m" << std::endl;
+                        seq_.fetch_add(1);
                         clouds = 0;
                         rev_min = std::numeric_limits<float>::infinity();
                     }
@@ -129,6 +129,7 @@ private:
 
     std::unique_ptr<unilidar::UnitreeLidarReader, RD> reader_;
     std::thread worker_;
+    PLYLogger   logger_;                 //  <<< nově
 
     std::atomic<bool>     running_{false};
     std::atomic<float>    latest_;
