@@ -6,5 +6,5 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 include_directories(${CMAKE_SOURCE_DIR}/unitree_lidar_sdk/include)
 link_directories(${CMAKE_SOURCE_DIR}/unitree_lidar_sdk/lib/${CMAKE_SYSTEM_PROCESSOR})
 add_executable(robot_lidar_tcp robot_lidar_tcp.cpp)
-target_link_libraries(robot_lidar_tcp PRIVATE pthread libunilidar_sdk2.a)
+target_link_libraries(robot_lidar_tcp PRIVATE pthread unilidar_sdk2)
 
