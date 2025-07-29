@@ -95,7 +95,13 @@ void handle_client(int sock) {
                 lidar.stop();
                 send_line(sock, "OK STOPPED");
             } else if (line == "DISTANCE") {
-                send_line(sock, std::to_string(lidar.lastDistance()));
+                uint64_t seq;
+                float dist;
+                if (lidar.getDistance(seq, dist)) {
+                    send_line(sock, std::to_string(seq) + " " + std::to_string(dist));
+                } else {
+                    send_line(sock, "-1");   // vzdálenost zatím není známa
+                }
             } else if (line == "EXIT") {
                 send_line(sock, "BYE");
                 ::shutdown(sock, SHUT_RDWR);
