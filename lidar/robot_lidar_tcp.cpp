@@ -84,7 +84,7 @@ void handle_client(int sock) {
             buffer.erase(0, pos + 1);
             if (!line.empty() && line.back() == '\r') line.pop_back();
 
-            std::cout << "CMD(" << sock << "): " << line << std::endl;
+            //std::cout << "CMD(" << sock << "): " << line << std::endl;
 
             if (line == "PING") {
                 send_line(sock, "PONG");

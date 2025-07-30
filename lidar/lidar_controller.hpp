@@ -106,9 +106,10 @@ private:
     }
 
     void loopRead() {
-        const int REV_CLOUDS = 6;
+        //const int REV_CLOUDS = 10;
         float rev_min = std::numeric_limits<float>::infinity();
-        int   clouds  = 0;
+        //int   clouds  = 0;
+        auto t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
         while (running_) {
             int pkt = reader_->runParse();
             if (pkt == LIDAR_POINT_DATA_PACKET_TYPE) {
@@ -124,11 +125,12 @@ private:
                     float cloud_min = pointproc::minDistance(proc);
                     if (cloud_min >= 0 && cloud_min < rev_min) rev_min = cloud_min;
 
-                    if (++clouds >= REV_CLOUDS) {
+                    if (std::chrono::steady_clock::now() > t_end || cloud_min < 50) {
                         latest_.store(rev_min);
                         seq_.fetch_add(1);
-                        clouds = 0;
+                        t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
                         rev_min = std::numeric_limits<float>::infinity();
+                        std::cerr << "[loopRead] data: " << latest_.load() << " s:" << seq_.load() << std::endl;
                     }
                 }
             }

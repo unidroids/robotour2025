@@ -25,6 +25,10 @@ chmod +x register_camera_service.sh unregister_camera_service.sh
 ./register_camera_service.sh
 systemctl status robot-cameras
 
+chmod +x lidar_service_register.sh lidar_service_unregister.sh
+./lidar_service_register.sh
+systemctl status robot-lidar
+
 # uninstallace
 ./unregister_fastapi.sh 
 ./unregister_zeroconf.sh 
@@ -33,10 +37,12 @@ systemctl status robot-cameras
 systemctl status fastapi-server
 systemctl status zeroconf
 systemctl status robot-cameras
+systemctl status robot-lidar
 
 # restart
 sudo systemctl restart fastapi-server
 sudo systemctl restart robot-cameras
+sudo systemctl restart robot-lidar
 
 # vypis
 nano /data/logs/fastapi/fastapi.log 
@@ -48,4 +54,6 @@ tail -f /data/logs/fastapi/zeroconf.log
 nano /data/logs/camera/cameras.log
 tail -f /data/logs/camera/cameras.log
 
+nano /data/logs/lidar/lidar.log
+tail -f /data/logs/lidar/lidar.log
 

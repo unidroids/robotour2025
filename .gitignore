@@ -21,3 +21,4 @@ Thumbs.db
 #c++
 **/bin/
 **/build/
+server/robot_lidar_tcp
