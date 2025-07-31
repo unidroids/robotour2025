@@ -73,7 +73,8 @@ try:
         last_resp = ""
         response = ser.read_all().decode('utf-8')
         if (last_resp != response):
-            print(response.split()[0])
+            print("\t\t\t" + response.split("\n")[2])
+            #print(response)
             last_resp = response
 
         time.sleep(0.1)  # Krátká pauza test
