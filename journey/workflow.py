@@ -63,7 +63,7 @@ def journey_workflow(client_conn=None):
                 if temp_state == "break":
                     send_command(PORT_DRIVE, "BREAK")
                 else:
-                    send_command(PORT_DRIVE, "PWM 20 20")
+                    send_command(PORT_DRIVE, "PWM 21 20")
                 last_state = temp_state
             time.sleep(0.2)
         send_command(PORT_DRIVE, "STOP")

@@ -13,7 +13,7 @@ shutdown_flag = threading.Event()
 
 def handle_client(conn, addr):
     with conn:
-        conn.sendall(b"Welcome to Journey!\n")
+        #conn.sendall(b"Welcome to Journey!\n")
         while not shutdown_flag.is_set():
             try:
                 data = conn.recv(1024)
