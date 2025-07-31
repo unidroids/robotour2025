@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Robotour Servisní Panel</title>
+    <title>Robotour - Drive Test</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         html,
@@ -50,19 +50,22 @@
 
 <body>
     <div id="wrapper">
-        <div id="output">Výstup – připraven</div>
+        <div id="output">Drive Test - Výstup připraven</div>
         <div id="controls">
-            <button onclick="callEndpoint('info')">Získat info</button>
-            <button onclick="location.href='/camera_test'">Kamera Test</button>
-            <button onclick="location.href='/lidar_test'">Lidar Test</button>
-            <button onclick="location.href='/drive_test'">Drive Test</button>
-            <button onclick="location.href='/demo'">Demo</button>
-            <button onclick="callEndpoint('shutdown', 'POST')">Vypnout</button>
-            <button onclick="forceFullScreenLayout()">Znovu vynutit velikost</button>
+            <button onclick="driveCmd('status')">Status</button>
+            <button onclick="driveCmd('start')">Start</button>
+            <button onclick="driveCmd('forward')">Dopředu</button>
+            <button onclick="driveCmd('break')">Brzda</button>
+            <button onclick="driveCmd('backward')">Dozadu</button>
+            <button onclick="driveCmd('stop')">Stop</button>
+            <hr />
+            <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>
         </div>
     </div>
 
     <script>
+        let eventSource = null;
+
         function updateSizeInfo() {
             const info = [
                 `window.innerWidth: ${window.innerWidth}`,
@@ -71,7 +74,7 @@
                 `clientHeight: ${document.documentElement.clientHeight}`
             ].join('\n');
 
-            logOutput("🧭 Rozměry:\n" + info);
+            //logOutput("🧭 Rozměry:\n" + info);
         }
 
         function forceFullScreenLayout() {
@@ -84,16 +87,14 @@
             updateSizeInfo();
         }
 
-        async function callEndpoint(endpoint, method = 'GET') {
+        async function driveCmd(cmd) {
             try {
-                const res = await fetch(`/${endpoint}`, {
-                    method,
-                    headers: { "Content-Type": "application/json" }
-                });
-                const data = await res.json();
-                logOutput(`✅ Odpověď z /${endpoint}:\n` + JSON.stringify(data, null, 2));
-            } catch (err) {
-                logOutput(`❌ Chyba při volání /${endpoint}:\n` + err);
+                const r = await fetch(`/drive/${cmd}`);
+                if (!r.ok) throw new Error(await r.text());
+                const data = await r.json();
+                logOutput(`✅ Odpověď na ${cmd}:\n` + JSON.stringify(data, null, 2));
+            } catch (e) {
+                logOutput("❌ " + e.message);
             }
         }
 
