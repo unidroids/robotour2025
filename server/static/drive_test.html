@@ -22,7 +22,7 @@
         }
 
         #output {
-            flex: 1;
+            flex: 2;
             background-color: #ffffdd;
             padding: 1rem;
             padding-left: 3rem;
@@ -30,8 +30,33 @@
             white-space: pre-wrap;
         }
 
+        #break {
+            width: 8rem;
+            min-width: 8rem;
+            max-width: 8rem;
+            background-color: #e64d4d;
+            padding: 0.2rem;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .vertical-btn {
+            writing-mode: vertical-rl;
+            text-orientation: upright;
+            font-size: 3rem;
+            padding: 0.5em 0.1em;
+            letter-spacing: 0;
+            width: 100%;
+            height: 100%;
+            color: white;
+            background-color: #e64d4d;
+        }
+
         #controls {
-            flex: 1;
+            flex: 2;
             background-color: #eeeeee;
             padding: 1rem;
             overflow-y: auto;
@@ -51,6 +76,9 @@
 <body>
     <div id="wrapper">
         <div id="output">Drive Test - Výstup připraven</div>
+        <div id="break">
+            <button class="vertical-btn" onclick="driveCmd('break')">STŮJ</button>
+        </div>
         <div id="controls">
             <button onclick="driveCmd('status')">Status</button>
             <button onclick="driveCmd('start')">Start</button>
