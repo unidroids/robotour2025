@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+import traceback
 
 from services import send_command
 from util import log_event, parse_lidar_distance
@@ -12,29 +12,40 @@ PORT_DRIVE = 9003
 demo_running = threading.Event()
 stop_requested = threading.Event()
 
-def journey_workflow(client_conn):
+def safe_send(conn, msg):
+    """
+    Bezpečně pošle data klientovi, případně zaloguje chybu.
+    Pokud klient není připojen, jen zaloguje, workflow pokračuje.
+    """
+    try:
+        conn.sendall(msg)
+    except Exception as e:
+        log_event(f"CLIENT_SEND_ERROR: {e}")
+
+def journey_workflow(client_conn=None):
     log_event("WORKFLOW started.")
     demo_running.set()
     stop_requested.clear()
     try:
-        # CAMERA sekvence
-        client_conn.sendall(b"CAMERA, PING\n")
+        # --- Kamera ---
+        if client_conn: safe_send(client_conn, b"CAMERA, PING\n")
         send_command(PORT_CAMERA, "PING")
         send_command(PORT_CAMERA, "START")
         send_command(PORT_CAMERA, "QR")
         send_command(PORT_CAMERA, "STOP")
-        # LIDAR sekvence
+        # --- Lidar ---
         send_command(PORT_LIDAR, "PING")
         send_command(PORT_LIDAR, "START")
         # Nekonečná smyčka - LIDAR, DISTANCE == -1
         while not stop_requested.is_set():
             resp = send_command(PORT_LIDAR, "DISTANCE")
             idx, dist = parse_lidar_distance(resp)
-            client_conn.sendall(f"LIDAR DISTANCE: {resp}\n".encode())
+            if client_conn:
+                safe_send(client_conn, f"LIDAR DISTANCE: {resp}\n".encode())
             if idx != -1 and dist is not None:
                 break
             time.sleep(0.2)
-        # DRIVE sekvence
+        # --- Drive ---
         send_command(PORT_DRIVE, "PING")
         send_command(PORT_DRIVE, "START")
         # Hlavní bezpečný cyklus s timeoutem
@@ -57,10 +68,16 @@ def journey_workflow(client_conn):
             time.sleep(0.2)
         send_command(PORT_DRIVE, "STOP")
         send_command(PORT_LIDAR, "STOP")
-        client_conn.sendall(b"WORKFLOW finished.\n")
+        if client_conn: safe_send(client_conn, b"WORKFLOW finished.\n")
         log_event("WORKFLOW finished.")
     except Exception as e:
-        log_event(f"WORKFLOW ERROR: {e}")
+        tb = traceback.format_exc()
+        log_event(f"WORKFLOW ERROR: {e}\n{tb}")
+        if client_conn:
+            try:
+                safe_send(client_conn, f"WORKFLOW ERROR: {e}\n".encode())
+            except Exception:
+                pass
     finally:
         demo_running.clear()
 
