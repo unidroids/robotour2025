@@ -57,3 +57,4 @@ tail -f /data/logs/camera/cameras.log
 nano /data/logs/lidar/lidar.log
 tail -f /data/logs/lidar/lidar.log
 
+tail -f /data/logs/drive/drive.log
