@@ -25,7 +25,7 @@ Tým **Unidroids** je novým účastníkem soutěže **Robotour 2025**. Náš ro
 
 ## 🎥 Registrační video
 
-YouTube video: [ROBOTOUR 2025 REGISTRATION – Unidroids](https://www.youtube.com/watch?v=...)
+YouTube video: [ROBOTOUR 2025 REGISTRATION – Unidroids](https://www.youtube.com/watch?v=jIPX0ZO7tB0)
 
 Obsahuje:
 
