@@ -45,3 +45,4 @@ echo "🔁 Aktivuji službu robot-cameras.service"
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable --now robot-cameras.service
+echo "   tail -f $LOG_FILE"

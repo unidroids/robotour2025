@@ -44,3 +44,4 @@ echo "🔁 Aktivuji službu robot-lidar.service"
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 sudo systemctl enable --now robot-lidar.service
+echo "   tail -f $LOG_FILE"
