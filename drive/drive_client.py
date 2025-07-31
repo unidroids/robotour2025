@@ -3,6 +3,18 @@ import threading
 
 shutdown_flag = False
 
+def clamp(val, minval, maxval):
+    return max(minval, min(maxval, val))
+
+def pwm_left_to_serial_byte(axis_1):
+    # Negace osy podle vzoru!
+    val = clamp(int(round(axis_1 * 30)), -30, 30)
+    return val + 158
+
+def pwm_right_to_serial_byte(axis_3):
+    val = clamp(int(round(axis_3 * 30)), -30, 30)
+    return val + 219
+
 def handle_client(conn, addr):
     print(f"📡 Klient připojen: {addr}")
     global shutdown_flag
@@ -37,21 +49,26 @@ def handle_client(conn, addr):
                     send("OK")
 
                 elif cmd == "PWM":
+                    # Očekáváme hodnoty v rozsahu -100..100 (jako z původního zadání)
                     if len(parts) == 3:
                         try:
-                            pwm_left = int(parts[1])
-                            pwm_right = int(parts[2])
-                            data_bytes = pwm_left.to_bytes(2, 'little', signed=True) + pwm_right.to_bytes(2, 'little', signed=True)
-                            send_serial(data_bytes)
+                            axis_1 = float(parts[1]) / 100.0  # převod na -1..1
+                            axis_3 = float(parts[2]) / 100.0
+                            left_motor = pwm_left_to_serial_byte(axis_1)
+                            right_motor = pwm_right_to_serial_byte(axis_3)
+                            send_serial(bytes([left_motor]))
+                            send_serial(bytes([right_motor]))
+                            print(f"PWM {axis_1:.2f} {axis_3:.2f} => {left_motor} {right_motor}")
                             send("OK")
                         except Exception as e:
                             send(f"ERR {e}")
                     else:
                         send("ERR Param count")
 
-                elif cmd == "BREAK":
-                    data_bytes = (0).to_bytes(2, 'little', signed=True) + (0).to_bytes(2, 'little', signed=True)
-                    send_serial(data_bytes)
+                elif cmd == "BREAK" or cmd == "B":
+                    # Posílá "střed" (zastavení) pro obě kola
+                    send_serial(bytes([158]))
+                    send_serial(bytes([219]))
                     send("OK")
 
                 elif cmd == "EXIT":
