@@ -13,6 +13,7 @@ import os
 from camera_api import router as camera_router
 from lidar_api import router as lidar_router
 from drive_api import router as drive_router
+from journey_api import router as journey_router
 
 from nocache import NoCacheMiddleware
 
@@ -23,6 +24,7 @@ app.mount("/static", StaticFiles(directory="/opt/projects/robotour/server/static
 app.include_router(camera_router)
 app.include_router(lidar_router)
 app.include_router(drive_router)
+app.include_router(journey_router)
 
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
