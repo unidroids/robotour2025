@@ -41,6 +41,7 @@ systemctl status robot-lidar
 
 # restart
 sudo systemctl restart fastapi-server
+sudo systemctl restart zeroconf
 sudo systemctl restart robot-cameras
 sudo systemctl restart robot-lidar
 
