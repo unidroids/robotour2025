@@ -21,7 +21,7 @@ After=network.target
 User=user
 WorkingDirectory=/opt/projects/robotour/drive
 
-# před spuštěním ukonči libovolný proces, který drží port 9002
+# před spuštěním ukonči libovolný proces, který drží port 9003
 ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9003/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 

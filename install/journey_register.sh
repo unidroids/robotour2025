@@ -23,8 +23,8 @@ WorkingDirectory=/opt/projects/robotour/journey
 # Ne-bufferovaný výstup pro okamžité logování
 Environment=PYTHONUNBUFFERED=1
 
-# Před spuštěním ukonči případný proces, který drží port 9004
-ExecStartPre=-/usr/bin/fuser -k 9004/tcp
+# před spuštěním ukonči libovolný proces, který drží port 9004
+ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9004/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 
 ExecStart=/usr/bin/python3 main.py

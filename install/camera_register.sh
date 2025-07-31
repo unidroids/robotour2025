@@ -24,8 +24,7 @@ WorkingDirectory=/opt/projects/robotour/server
 Environment=PYTHONUNBUFFERED=1
 
 # před spuštěním ukonči libovolný proces, který drží port 9001
-# ExecStartPre=/usr/bin/fuser -k 9001/tcp
-ExecStartPre=-/usr/bin/fuser -k 9001/tcp
+ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9001/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 
 ExecStart=/usr/bin/python3 cameras.py
