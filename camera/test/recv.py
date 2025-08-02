@@ -16,39 +16,42 @@ def resize_to_screen(frame, max_width=1280, max_height=720):
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind((IP_LAPTOP, PORT))
 s.listen(1)
-print("Waiting for Jetson...")
-conn, addr = s.accept()
-print(f"Connected from {addr}")
 
 while True:
-    # Přijmi délku (4 bajty)
-    length = b''
-    while len(length) < 4:
-        more = conn.recv(4 - len(length))
-        if not more:
+    print("Waiting for Jetson...")
+    conn, addr = s.accept()
+    print(f"Connected from {addr}")
+
+    while True:
+        # Přijmi délku (4 bajty)
+        length = b''
+        while len(length) < 4:
+            more = conn.recv(4 - len(length))
+            if not more:
+                break
+            length += more
+        if not length:
             break
-        length += more
-    if not length:
-        break
-    size = int.from_bytes(length, 'big')
+        size = int.from_bytes(length, 'big')
 
-    # Přijmi samotná data
-    data = b''
-    while len(data) < size:
-        more = conn.recv(size - len(data))
-        if not more:
+        # Přijmi samotná data
+        data = b''
+        while len(data) < size:
+            more = conn.recv(size - len(data))
+            if not more:
+                break
+            data += more
+        if not data:
             break
-        data += more
-    if not data:
-        break
 
-    # Dekóduj obrázek a zobraz
-    frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), 1)
-    frame = resize_to_screen(frame, 1280, 720)
-    cv2.imshow('Jetson Camera', frame)
-    if cv2.waitKey(1) == 27:
-        break
+        # Dekóduj obrázek a zobraz
+        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), 1)
+        #frame = resize_to_screen(frame, 1280, 720)
+        cv2.imshow('Jetson Camera', frame)
+        if cv2.waitKey(1) == 27:
+            break
 
-conn.close()
+    conn.close()
+    cv2.destroyAllWindows()
+
 s.close()
-cv2.destroyAllWindows()
