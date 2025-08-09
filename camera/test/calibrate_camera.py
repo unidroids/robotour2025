@@ -17,7 +17,17 @@ objp *= SQUARE_SIZE
 objpoints = []  # 3D body v reálném světě
 imgpoints = []  # 2D body v obraze
 
-cap = cv2.VideoCapture(0)
+def gst_pipeline(sensor_id=0, w=540, h=480, fps=10):
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM), width={w}, height={h}, framerate={fps}/1 ! "
+        "nvvidconv ! video/x-raw, format=BGRx ! "
+        "videoconvert ! video/x-raw, format=BGR ! appsink drop=true"
+    )
+
+
+cap = cv2.VideoCapture(gst_pipeline(0), cv2.CAP_GSTREAMER)
+#cap = cv2.VideoCapture(0)  # nebo pipeline pro Jetson
 
 print("Stiskněte 's' pro uložení rohů, 'q' pro ukončení a kalibraci.")
 while True:

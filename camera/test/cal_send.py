@@ -7,13 +7,17 @@ import struct
 PORT = 5010
 LAPTOP_IP = "192.168.55.100"  # zadej IP laptopu
 
-def gst_pipeline(sensor_id=0, w=540, h=480, fps=10):
-    return (
+def gst_pipeline(sensor_id=0, w=540, h=480, fps=10, dewarp_cfg=None):
+    base = (
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
         f"video/x-raw(memory:NVMM), width={w}, height={h}, framerate={fps}/1 ! "
         "nvvidconv ! video/x-raw, format=BGRx ! "
-        "videoconvert ! video/x-raw, format=BGR ! appsink drop=true"
+        "videoconvert !"
     )
+    if dewarp_cfg:
+        base += f" glfilterdewarp config={dewarp_cfg} !"
+    base += " video/x-raw, format=BGR ! appsink drop=true"
+    return base
 
 
 cap = cv2.VideoCapture(gst_pipeline(0), cv2.CAP_GSTREAMER)
@@ -28,10 +32,28 @@ objp = np.zeros((CHESSBOARD_SIZE[0] * CHESSBOARD_SIZE[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:CHESSBOARD_SIZE[0], 0:CHESSBOARD_SIZE[1]].T.reshape(-1, 2)
 objpoints, imgpoints = [], []
 
+# Načti kalibrační matice
+d = np.load("camera_calibration.npz")
+cameraMatrix = d["cameraMatrix"]
+distCoeffs = d["distCoeffs"]
+
+# Předpokládej známé rozlišení (např. z kamery)
+w, h = 540, 480
+
+# Získání nové matice kamery (můžeš použít stejné rozlišení nebo spočítat z aktuálního snímku)
+newcameramtx, roi = cv2.getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, (w,h), 1, (w,h))
+# Předpočítej mapy pro remapování (toto uděláš jen jednou)
+map1, map2 = cv2.initUndistortRectifyMap(cameraMatrix, distCoeffs, None, newcameramtx, (w, h), cv2.CV_16SC2)
+
+
+
 while True:
     ret, frame = cap.read()
+    
     if not ret:
         continue
+
+    frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     ret_corners, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
