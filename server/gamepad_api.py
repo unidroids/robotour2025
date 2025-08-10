@@ -1,38 +1,38 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-import socket, json
+from fastapi.responses import JSONResponse, FileResponse
+import asyncio
+import socket
+from sse_starlette.sse import EventSourceResponse
 
-router = APIRouter(prefix="/api/gamepad", tags=["gamepad"])
-HOST = "127.0.0.1"
-PORT = 9005
-TIMEOUT = 1.0
+router = APIRouter()
 
+GAMEPAD_HOST = "127.0.0.1"
+GAMEPAD_PORT = 9005
 
-def _send(cmd: str):
-    with socket.create_connection((HOST, PORT), timeout=TIMEOUT) as s:
-        s.sendall((cmd + "
-").encode("utf-8"))
-        data = s.recv(65536)
+GAMEPAD_CMD_MAP = {
+    "status"    : "PING",
+    "start"     : "START",
+    "data"      : "DATA",
+    "stop"      : "STOP",
+}
+
+def send_gamepad(cmd: str, timeout=3) -> str:
+    with socket.create_connection((GAMEPAD_HOST, GAMEPAD_PORT), timeout=timeout) as s:
+        s.sendall((cmd + "\n").encode())
+        data = s.recv(4096)
+    return data.decode(errors="ignore").strip()
+
+@router.get("/gamepad_test")
+async def gamepad_test_page():
+    return FileResponse("/opt/projects/robotour/server/static/gamepad_test.html")
+
+@router.get("/gamepad/{action}")
+async def gamepad_action(action: str):
+    action = action.lower()
+    if action not in GAMEPAD_CMD_MAP:
+        return JSONResponse(status_code=400, content={"error":"bad action"})
     try:
-        return json.loads(data.decode("utf-8").strip())
-    except Exception:
-        return {"raw": data.decode("utf-8", errors="replace")}
-
-@router.get("/status")
-def status():
-    return JSONResponse(_send("STATUS"))
-
-@router.post("/wheels")
-@router.get("/wheels")
-def wheels():
-    return JSONResponse(_send("WHEELS"))
-
-@router.post("/drive")
-@router.get("/drive")
-def drive():
-    return JSONResponse(_send("DRIVE"))
-
-@router.post("/stop")
-@router.get("/stop")
-def stop():
-    return JSONResponse(_send("STOP"))
+        resp = await asyncio.to_thread(send_gamepad, GAMEPAD_CMD_MAP[action])
+        return {"action":action, "response":resp}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error":str(e)})
