@@ -41,11 +41,11 @@ def handle_client(conn: socket.socket, addr):
                     elif cmd == "DATA":
                         with core.cond:
                             core.cond.wait_for(lambda: core.stop_event.is_set() or core.msg_index > last_idx, timeout=0.5)
-                            if core.stop_event.is_set():
-                                _send_line(conn, "STOPPED")
+                            if core.stop_event.is_set() or core.compute_thread_started==False:
+                                _send_line(conn, "PWM 0 0#STOPPED")
                                 continue
                             if core.latest_payload is None or core.msg_index == last_idx:
-                                _send_line(conn, "NO DATA")
+                                _send_line(conn, "PWM 0 0#NO DATA")
                                 continue
                             last_idx = core.msg_index
                             payload = core.latest_payload  # str

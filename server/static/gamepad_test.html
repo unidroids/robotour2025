@@ -18,55 +18,29 @@
 
         #output {
             flex: 2;
-            background: #ffffdd;
-            padding: 1rem 2rem;
+            background-color: #ffffdd;
+            padding: 1rem;
+            padding-left: 3rem;
+            overflow-y: auto;
             white-space: pre-wrap;
-            overflow: auto
         }
 
         #controls {
             flex: 1;
-            background: #eee;
+            background-color: #eeeeee;
             padding: 1rem;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 0.75rem
+            gap: 1rem;
         }
 
         button {
-            padding: 0.6rem 0.9rem;
-            border: 0;
-            border-radius: 10px;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
-            cursor: pointer
+            padding: 1rem;
+            font-size: 1.1rem;
+            cursor: pointer;
         }
 
-        .row {
-            display: flex;
-            gap: 0.5rem
-        }
-
-        .tag {
-            display: inline-block;
-            background: #222;
-            color: #fff;
-            padding: 0.1rem 0.45rem;
-            border-radius: 6px;
-            font-size: 0.85rem
-        }
-
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: .5rem
-        }
-
-        .card {
-            background: #fff;
-            border-radius: 12px;
-            padding: .6rem .8rem;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, .06)
-        }
 
         code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
@@ -83,60 +57,32 @@
             <pre id="log"></pre>
         </div>
         <div id="controls">
-            <div class="row">
-                <button onclick="call('status')">Stav</button>
-                <button onclick="call('start')">Start</button>
-                <button onclick="call('data')">Data</button>
-                <button onclick="call('stop')">Stop</button>
-            </div>
-            <div class="card">
-                <label><input type="checkbox" id="autoref" checked> Auto-refresh (500 ms)</label>
-            </div>
-            <div class="grid">
-                <div class="card"><strong>Režim:</strong> <span id="mode" class="tag">a-</span></div>
-                <div class="card"><strong>Running:</strong> <span id="running" class="tag">-</span></div>
-                <div class="card"><strong>Last button:</strong> <code id="btn">-</code></div>
-                <div class="card"><strong>TS:</strong> <code id="ts">-</code></div>
-            </div>
-            <div class="card">
-                <strong>Axes</strong>
-                <div id="axes"></div>
-            </div>
-            <div class="grid">
-                <div class="card"><strong>Wheels L/R</strong> <code id="wheels">-</code></div>
-                <div class="card"><strong>Drive L/R</strong> <code id="drive">-</code></div>
+            <button onclick="call('status')">Stav</button>
+            <button onclick="call('start');S('#autoref').checked=true;">Start</button>
+            <button onclick="call('data')">Data</button>
+            <button onclick="call('stop');S('#autoref').checked=false;">Stop</button>
+            <hr />
+            <div>
+                <label><input type="checkbox" id="autoref"> Auto-refresh (500 ms)</label>
             </div>
             <button onclick="clearLog()">Clear log</button>
+            <hr />
+            <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>
         </div>
     </div>
     <script>
         const S = sel => document.querySelector(sel);
         const logEl = S('#log');
         function log(x) {
-            logEl.textContent += x + "\n"; logEl.scrollTop = logEl.scrollHeight;
+            logEl.textContent = x + "\n" + logEl.textContent; //logEl.scrollTop = logEl.scrollHeight;
         }
 
         async function call(kind) {
             let url = '/gamepad/' + kind;
             const res = await fetch(url, { method: ('GET') });
-            const j = await res.json();
-            if (kind == "data") render(j);
-            log('> ' + kind.toUpperCase() + ' ' + JSON.stringify(j));
-        }
-
-        function render(x) {
-            j = JSON.parse(x.response);
-
-            S('#mode').textContent = j.mode;
-
-            S('#running').textContent = j.idx;
-            S('#btn').textContent = j.last_button || '-';
-            S('#ts').textContent = j.ts ? new Date(j.ts * 1000).toLocaleTimeString() : '-';
-            const a = j.axes || {};
-            S('#axes').textContent = Object.keys(a).map(k => `${k}: ${a[k].toFixed ? a[k].toFixed(3) : a[k]}`).join(' ');
-            const w = j.left_wheel; S('#wheels').textContent = w;
-            const d = j.right_wheel; S('#drive').textContent = d;
-            S('#state').textContent = JSON.stringify(j, null, 2);
+            const data = await res.json();
+            S('#state').textContent = JSON.stringify(data, null, 2);
+            log('> ' + kind.toUpperCase() + ':' + data.response);
         }
 
         function clearLog() { logEl.textContent = ''; }
