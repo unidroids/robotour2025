@@ -29,6 +29,8 @@ chmod +x lidar_service_register.sh lidar_service_unregister.sh
 ./lidar_service_register.sh
 systemctl status robot-lidar
 
+ chmod +x gamepad_service_register.sh gamepad_service_unregister.sh 
+
 # uninstallace
 ./unregister_fastapi.sh 
 ./unregister_zeroconf.sh 

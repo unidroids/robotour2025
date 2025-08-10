@@ -57,7 +57,7 @@ def handle_client(conn: socket.socket, addr):
                         _send_line(conn, "OK STOPPED")
 
                     elif cmd == "EXIT":
-                        send("BYE")
+                        _send_line(conn, "BYE")
                         break
 
                     else:

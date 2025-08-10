@@ -27,8 +27,9 @@ After=network.target
 User=user
 WorkingDirectory=$WORK_DIR
 Environment=PYTHONUNBUFFERED=1
-ExecStartPre=/usr/bin/fuser -k 9005/tcp || true
-ExecStart=$VENV_BIN/python $WORK_DIR/server_gamepad.py
+ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9005/tcp || true'
+ExecStartPre=/bin/sleep 0.5
+ExecStart=$VENV_BIN/python $WORK_DIR/gamepad_server.py
 StandardOutput=append:$LOG_DIR/service.log
 StandardError=append:$LOG_DIR/service.log
 Restart=always
@@ -42,9 +43,9 @@ echo "🔄 Načítám systemd..."
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
 echo "▶️ Povoluji a spouštím službu..."
-sudo systemctl enable --now journey.service
+sudo systemctl enable --now robot-gamepad.service
 
 sleep 0.3
 sudo systemctl --no-pager --full status robot-gamepad.service || true
 
-echo "   tail -f $LOG_FILE"
+echo "   tail -f $LOG_DIR/service.log"
