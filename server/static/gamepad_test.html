@@ -1,0 +1,147 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gamepad Test</title>
+    <style>
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu
+        }
+
+        #wrapper {
+            display: flex;
+            min-height: 100vh
+        }
+
+        #output {
+            flex: 2;
+            background: #ffffdd;
+            padding: 1rem 2rem;
+            white-space: pre-wrap;
+            overflow: auto
+        }
+
+        #controls {
+            flex: 1;
+            background: #eee;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem
+        }
+
+        button {
+            padding: 0.6rem 0.9rem;
+            border: 0;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .1);
+            cursor: pointer
+        }
+
+        .row {
+            display: flex;
+            gap: 0.5rem
+        }
+
+        .tag {
+            display: inline-block;
+            background: #222;
+            color: #fff;
+            padding: 0.1rem 0.45rem;
+            border-radius: 6px;
+            font-size: 0.85rem
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: .5rem
+        }
+
+        .card {
+            background: #fff;
+            border-radius: 12px;
+            padding: .6rem .8rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, .06)
+        }
+
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+        }
+    </style>
+</head>
+
+<body>
+    <div id="wrapper">
+        <div id="output">
+            <h2>📟 Stav</h2>
+            <div id="state"></div>
+            <h3>Log</h3>
+            <pre id="log"></pre>
+        </div>
+        <div id="controls">
+            <div class="row">
+                <button onclick="call('status')">Stav</button>
+                <button onclick="call('wheels')">Wheel</button>
+                <button onclick="call('drive')">Drive</button>
+                <button onclick="call('stop')">Stop</button>
+            </div>
+            <div class="card">
+                <label><input type="checkbox" id="autoref" checked> Auto-refresh (500 ms)</label>
+            </div>
+            <div class="grid">
+                <div class="card"><strong>Režim:</strong> <span id="mode" class="tag">-</span></div>
+                <div class="card"><strong>Running:</strong> <span id="running" class="tag">-</span></div>
+                <div class="card"><strong>Last button:</strong> <code id="btn">-</code></div>
+                <div class="card"><strong>TS:</strong> <code id="ts">-</code></div>
+            </div>
+            <div class="card">
+                <strong>Axes</strong>
+                <div id="axes"></div>
+            </div>
+            <div class="grid">
+                <div class="card"><strong>Wheels L/R</strong> <code id="wheels">-</code></div>
+                <div class="card"><strong>Drive L/R</strong> <code id="drive">-</code></div>
+            </div>
+            <button onclick="clearLog()">Clear log</button>
+        </div>
+    </div>
+    <script>
+        const S = sel => document.querySelector(sel);
+        const logEl = S('#log');
+        function log(x) {
+            logEl.textContent += x + " "; logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function call(kind) {
+            let url = '/api/gamepad/' + kind;
+            const res = await fetch(url, { method: (kind === 'status' ? 'GET' : 'POST') });
+            const j = await res.json();
+            render(j);
+            log('> ' + kind.toUpperCase() + ' ' + JSON.stringify(j));
+        }
+
+        function render(j) {
+            S('#mode').textContent = j.mode;
+            S('#running').textContent = j.running;
+            S('#btn').textContent = j.last_button || '-';
+            S('#ts').textContent = j.ts ? new Date(j.ts * 1000).toLocaleTimeString() : '-';
+            const a = j.axes || {};
+            S('#axes').textContent = Object.keys(a).map(k => `${k}: ${a[k].toFixed ? a[k].toFixed(3) : a[k]}`).join(' ');
+            const w = j.wheels || {}; S('#wheels').textContent = `${w.left ?? '-'} / ${w.right ?? '-'}`;
+            const d = j.drive || {}; S('#drive').textContent = `${d.left ?? '-'} / ${d.right ?? '-'}`;
+            S('#state').textContent = JSON.stringify(j, null, 2);
+        }
+
+        function clearLog() { logEl.textContent = ''; }
+
+        setInterval(() => { if (S('#autoref').checked) call('status'); }, 500);
+
+        call('status');
+    </script>
+</body>
+
+</html>

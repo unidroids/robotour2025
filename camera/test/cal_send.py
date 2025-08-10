@@ -7,16 +7,31 @@ import struct
 PORT = 5010
 LAPTOP_IP = "192.168.55.100"  # zadej IP laptopu
 
-def gst_pipeline(sensor_id=0, w=540, h=480, fps=10, dewarp_cfg=None):
+def gst_pipeline_with_snapshot_record(sensor_id=0, w=540, h=480, fps=10, out_file="snapshot.avi"):
+    return (
+        f"nvarguscamerasrc sensor-id={sensor_id} ! "
+        f"video/x-raw(memory:NVMM),width={w},height={h},framerate={fps}/1 ! "
+        "nvvidconv ! video/x-raw,format=BGRx ! "
+        "videoflip method=clockwise ! "
+        "tee name=t "
+        # Appsink větev pro OpenCV
+        "t. ! queue leaky=downstream max-size-buffers=1 ! "
+        "videoconvert ! video/x-raw,format=BGR ! appsink drop=true "
+        # Filesink větev pro snapshot/sekundu
+        "t. ! queue leaky=downstream max-size-buffers=1 ! "
+        "videorate ! video/x-raw,framerate=1/1 ! "  # 1 snímek za sekundu
+        "videoconvert ! video/x-raw,format=I420 ! "
+        "avimux ! filesink location={out_file} sync=false"
+    )
+
+#def gst_pipeline(sensor_id=0, w=540, h=480, fps=10):
+def gst_pipeline(sensor_id=0, w=800, h=800, fps=10):
     base = (
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
         f"video/x-raw(memory:NVMM), width={w}, height={h}, framerate={fps}/1 ! "
         "nvvidconv ! video/x-raw, format=BGRx ! "
-        "videoconvert !"
+        "videoconvert ! videoflip method=clockwise ! video/x-raw, format=BGR ! appsink drop=true"
     )
-    if dewarp_cfg:
-        base += f" glfilterdewarp config={dewarp_cfg} !"
-    base += " video/x-raw, format=BGR ! appsink drop=true"
     return base
 
 
@@ -32,18 +47,18 @@ objp = np.zeros((CHESSBOARD_SIZE[0] * CHESSBOARD_SIZE[1], 3), np.float32)
 objp[:, :2] = np.mgrid[0:CHESSBOARD_SIZE[0], 0:CHESSBOARD_SIZE[1]].T.reshape(-1, 2)
 objpoints, imgpoints = [], []
 
-# Načti kalibrační matice
-d = np.load("camera_calibration.npz")
-cameraMatrix = d["cameraMatrix"]
-distCoeffs = d["distCoeffs"]
+# # Načti kalibrační matice
+# d = np.load("camera_calibration.npz")
+# cameraMatrix = d["cameraMatrix"]
+# distCoeffs = d["distCoeffs"]
 
-# Předpokládej známé rozlišení (např. z kamery)
-w, h = 540, 480
+# # Předpokládej známé rozlišení (např. z kamery)
+# w, h = 540, 480
 
-# Získání nové matice kamery (můžeš použít stejné rozlišení nebo spočítat z aktuálního snímku)
-newcameramtx, roi = cv2.getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, (w,h), 1, (w,h))
-# Předpočítej mapy pro remapování (toto uděláš jen jednou)
-map1, map2 = cv2.initUndistortRectifyMap(cameraMatrix, distCoeffs, None, newcameramtx, (w, h), cv2.CV_16SC2)
+# # Získání nové matice kamery (můžeš použít stejné rozlišení nebo spočítat z aktuálního snímku)
+# newcameramtx, roi = cv2.getOptimalNewCameraMatrix(cameraMatrix, distCoeffs, (w,h), 1, (w,h))
+# # Předpočítej mapy pro remapování (toto uděláš jen jednou)
+# map1, map2 = cv2.initUndistortRectifyMap(cameraMatrix, distCoeffs, None, newcameramtx, (w, h), cv2.CV_16SC2)
 
 
 
@@ -53,7 +68,7 @@ while True:
     if not ret:
         continue
 
-    frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
+    # frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     ret_corners, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
