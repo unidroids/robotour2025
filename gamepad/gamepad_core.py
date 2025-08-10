@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 # pygame čtení + výpočty + ring buffer + toggling režimu SELECT
 import os, time, threading, json, pygame
-from collections import deque
 
 # --- Konstants ---
 POLL_PERIOD_SEC = 0.10          # 100 ms
 DEADZONE_WHEELS = 5             # ±5 -> 0 (pro -100..100)
 DEADZONE_SPEED  = 5
 STEER_RANGE     = 20            # ±20 rozdíl mezi koly (DRIVE)
-SELECT_BUTTONS  = {10}        # typické indexy "select/back/share"
+SELECT_BUTTONS  = {10}          # typické indexy "select/back/share"
 
 # --- Sdílený stav (bez tříd) ---
 joystick = None
@@ -18,7 +17,6 @@ compute_thread_started = False
 lock = threading.Lock()
 cond = threading.Condition(lock)   # ⬅ místo Event budeme vysílat notify_all()
 
-
 axes = {'axis_0': 0.0, 'axis_1': 0.0, 'axis_2': 0.0, 'axis_3': 0.0}
 last_button = None
 
@@ -26,11 +24,8 @@ left_wheel = 0
 right_wheel = 0
 
 last_ts = 0.0
-#payload_deque = deque(maxlen=3)
-latest_payload = None
-
-# čítač zpráv
-msg_index = 0
+latest_payload = None           # vždy str (JSON line)
+msg_index = 0                   # čítač zpráv
 
 # --- Pomocné funkce ---
 def clamp(v, lo, hi):
@@ -101,8 +96,8 @@ def compute_wheels_from_axes():
 
 def compute_drive_from_axes():
     global left_wheel, right_wheel
-    speed = apply_deadzone_int(scale_to_int(-axes['axis_3'], 100), DEADZONE_SPEED)  # levá vert
-    steer = scale_to_int(axes['axis_2'], STEER_RANGE)                               # levá horiz
+    speed = apply_deadzone_int(scale_to_int(-axes['axis_3'], 100), DEADZONE_SPEED)  # vert
+    steer = scale_to_int(axes['axis_2'], STEER_RANGE)                               # horiz
     left_wheel  = clamp(speed + steer, -100, 100)
     right_wheel = clamp(speed - steer, -100, 100)
 
@@ -116,12 +111,11 @@ def build_payload():
         "last_button": last_button,
         "ts": time.time()
     }
-    return json.dumps(obj, ensure_ascii=False).encode("utf-8")
-
+    return json.dumps(obj, ensure_ascii=False)   # ⬅ vrací str (NE bytes)
 
 # --- Vlákno výpočtů (100 ms) ---
 def compute_loop():
-    global last_ts, latest_payload, msg_index, compute_thread_started, cond
+    global last_ts, latest_payload, msg_index, compute_thread_started
     print("[GAMEPAD] Vlákno výpočtů START")
     try:
         while not stop_event.is_set():
@@ -131,18 +125,18 @@ def compute_loop():
             else:
                 compute_drive_from_axes()
             last_ts = time.time()
-            msg_index += 1                    # ++ index
+            msg_index += 1
             payload = build_payload()
             with cond:
-                latest_payload = payload
-                cond.notify_all()                 # ⬅ vzbuď všechny čekající (DATA + datalogger)
+                latest_payload = payload  # str
+                cond.notify_all()
+            #print("[GAMEPAD] Vlákno výpočtů LOOP", latest_payload)
             time.sleep(POLL_PERIOD_SEC)
-            print("[GAMEPAD] Vlákno výpočtů LOOP", latest_payload)
+    except Exception as e:
+            print("[GAMEPAD] Vlákno výpočtů Error:", e)            
     finally:
         compute_thread_started = False
         print("[GAMEPAD] Vlákno výpočtů STOP")
-
-
 
 def start_compute_once():
     global compute_thread_started, msg_index
@@ -155,9 +149,8 @@ def start_compute_once():
     return True
 
 def stop_all():
+    global latest_payload
     stop_event.set()
-    with cond:            # ⬅ probuď čekající na DATA/log
+    with cond:
         latest_payload = None
         cond.notify_all()
-        
-

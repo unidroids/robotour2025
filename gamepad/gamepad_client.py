@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
 # Per-connection handler: PING | START | DATA | STOP
-import json, socket
+import socket
+import gamepad_core as core
+from datalogger import start_dataloger_once
+from gamepad_control import register_client, unregister_client, shutdown_event
 
-from gamepad_core import init_gamepad, start_compute_once, stop_all
-from gamepad_core import cond, stop_event, latest_payload
-from datalogger   import start_dataloger_once
-from gamepad_control import register_client, unregister_client, request_shutdown, close_all_clients, shutdown_event
-
-def _send_line(conn, text):
+def _send_line(conn, text: str):
     try:
         conn.sendall((text + "\n").encode("utf-8"))
     except Exception as e:
         print(f"[CLIENT] send_line error: {e}")
 
-# def _send_json(conn, obj):
-#     try:
-#         conn.sendall(json.dumps(obj, ensure_ascii=False).encode("utf-8"))  # bez newline
-#     except Exception as e:
-#         print(f"[CLIENT] send_json error: {e}")
-
 def handle_client(conn: socket.socket, addr):
-    global latest_payload, cond, stop_event
     print(f"[SERVER] Klient připojen: {addr}")
     register_client(conn)
     try:
         buf = b""
+        last_idx = 0   # per-connection index (aby DATA vždy čekalo na nový vzorek)
         with conn:
             while not shutdown_event.is_set():
                 data = conn.recv(1024)
@@ -39,27 +31,34 @@ def handle_client(conn: socket.socket, addr):
                         _send_line(conn, "PONG")
 
                     elif cmd == "START":
-                        if init_gamepad():
-                            g = start_compute_once()       # běží jen jednou
-                            l = start_dataloger_once()     # běží jen jednou
-                            msg = "OK STARTED"
+                        if core.init_gamepad():
+                            started = core.start_compute_once()
+                            logger  = start_dataloger_once()
+                            _send_line(conn, "OK STARTED")
                         else:
-                            msg = "GAMEPAD NOT FOUND"
-                        _send_line(conn, msg)
+                            _send_line(conn, "GAMEPAD NOT FOUND")
 
                     elif cmd == "DATA":
-                        with cond:
-                            if latest_payload == None:
-                                _send_line(conn, "NO DATA")      # empty \n
-                            else:
-                                cond.wait_for(lambda: stop_event.is_set())
-                                payload = latest_payload
-                                _send_line(conn, payload)      # JSON s \n
+                        with core.cond:
+                            core.cond.wait_for(lambda: core.stop_event.is_set() or core.msg_index > last_idx, timeout=0.5)
+                            if core.stop_event.is_set():
+                                _send_line(conn, "STOPPED")
+                                continue
+                            if core.latest_payload is None or core.msg_index == last_idx:
+                                _send_line(conn, "NO DATA")
+                                continue
+                            last_idx = core.msg_index
+                            payload = core.latest_payload  # str
+                        _send_line(conn, payload)
 
                     elif cmd == "STOP":
                         _send_line(conn, "OK STOPPING GAMEPAD")
-                        stop_all()                         # jen gamepad+datalogger; server běží dál
+                        core.stop_all()
                         _send_line(conn, "OK STOPPED")
+
+                    elif cmd == "EXIT":
+                        send("BYE")
+                        break
 
                     else:
                         _send_line(conn, f"ERR Unknown command: {cmd}")
