@@ -2,13 +2,16 @@
 # DataLoger: čeká na data_ready_event, čte poslední payload a zapisuje do JSONL logu
 import os, time, json, threading
 from datetime import datetime
-from gamepad_core import data_ready_event, get_latest_payload, stop_event
+from gamepad_core import cond, stop_event
+from gamepad_core import latest_payload, msg_index   # čteme pod zámkem
 
 LOG_DIR = "/data/robot/gamepad"
-WRITE_PAUSE_SEC = 0.008  # krátká pauza, aby zápis nekonkuroval odpovědi DATA
+WRITE_PAUSE_SEC = 0.008
+
 
 dataloger_thread_started = False
 _log_fp = None
+
 
 def _open_new_file():
     global _log_fp
@@ -19,27 +22,23 @@ def _open_new_file():
     print(f"[DATALOGER] Log file: {path}")
 
 def dataloger_loop():
+    global dataloger_thread_started, cond, stop_event, latest_payload
     print("[DATALOGER] Vlákno START")
     try:
         _open_new_file()
         while not stop_event.is_set():
-            if not data_ready_event.wait(timeout=1.0):
-                continue
-            data_ready_event.clear()
-            payload = get_latest_payload()
-            time.sleep(WRITE_PAUSE_SEC)
-            try:
-                _log_fp.write(json.dumps(payload, ensure_ascii=False) + "\n")
-            except Exception as e:
-                print(f"[DATALOGER] Chyba zápisu: {e}")
-    except Exception as e:
-        print(f"[DATALOGER] Chyba ve vlákně: {e}")
+            with cond:
+                cond.wait_for(lambda: stop_event.is_set())
+                if stop_event.is_set():
+                    break
+                payload = latest_payload      # kopie pod zámkem
+            time.sleep(WRITE_PAUSE_SEC)       # neblokuj DATA odpovědi
+            _log_fp.write(payload + "\n")
     finally:
-        try:
-            if _log_fp: _log_fp.close()
-        except Exception:
-            pass
+        if _log_fp: _log_fp.close()
+        dataloger_thread_started = False
         print("[DATALOGER] Vlákno STOP")
+
 
 def start_dataloger_once():
     global dataloger_thread_started
