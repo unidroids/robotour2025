@@ -1,4 +1,4 @@
-### serial line ###
+### test serial line ###
 sudo apt install screen
 ukončit Ctrl+A -> K -> y
 ukončit Ctrl+A -> : -> quit
