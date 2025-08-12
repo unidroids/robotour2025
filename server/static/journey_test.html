@@ -77,11 +77,12 @@
     <div id="wrapper">
         <div id="output">Journey Test - Výstup připraven</div>
         <div id="break">
-            <button class="vertical-btn" onclick="journeyCmd('stop')">STOP</button>
+            <button class="vertical-btn" ontouchstart="journeyCmd('stop')">STOP</button>
         </div>
         <div id="controls">
             <button onclick="journeyCmd('status')">Status</button>
             <button onclick="journeyCmd('demo')">Demo</button>
+            <button onclick="journeyCmd('manual')">Manual</button>
             <button onclick="journeyCmd('stop')">Stop</button>
             <hr />
             <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>

@@ -46,7 +46,7 @@ sudo systemctl restart fastapi-server
 sudo systemctl restart zeroconf
 sudo systemctl restart robot-cameras
 sudo systemctl restart robot-lidar
-sudo systemctl restart journey
+sudo systemctl restart robot-journey
 sudo systemctl restart robot-gamepad
 
 # vypis

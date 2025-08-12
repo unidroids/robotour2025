@@ -12,9 +12,10 @@ def get_log():
 log_event.get_log = get_log
 
 def parse_lidar_distance(resp):
-    """
+    """`
     Vrací tuple (idx, dist):
-      "471 57.094425"  → (471, 57.094425)
+
+      "123 4.56"       → (123, 4.56)
       "-1"             → (-1, None)
       jinak            → (None, None)
     """

@@ -12,6 +12,7 @@ JOURNEY_PORT = 9004
 JOURNEY_CMD_MAP = {
     "status"    : "PING",
     "demo"      : "DEMO",
+    "manual"    : "MANUAL",
     "stop"      : "STOP",
 }
 

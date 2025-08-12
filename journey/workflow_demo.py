@@ -2,6 +2,9 @@ import threading
 import time
 import traceback
 
+import socket
+from typing import Optional, Tuple
+
 from services import send_command
 from util import log_event, parse_lidar_distance
 
@@ -11,6 +14,10 @@ PORT_DRIVE = 9003
 
 demo_running = threading.Event()
 stop_requested = threading.Event()
+
+# Interní reference na klienta, který startoval workflow – výsledky mu zkusíme posílat.
+_client_conn_lock = threading.Lock()
+_client_conn: Optional[socket.socket] = None
 
 def safe_send(conn, msg):
     """
@@ -22,7 +29,7 @@ def safe_send(conn, msg):
     except Exception as e:
         log_event(f"CLIENT_SEND_ERROR: {e}")
 
-def journey_workflow(client_conn=None):
+def _demo_workflow(client_conn=None):
     log_event("WORKFLOW started.")
     demo_running.set()
     stop_requested.clear()
@@ -81,7 +88,19 @@ def journey_workflow(client_conn=None):
     finally:
         demo_running.clear()
 
-def stop_workflow():
+def start_demo_workflow(client_conn: Optional[socket.socket]) -> None:
+    """Spustí DEMO workflow (pokud už neběží)."""
+    if demo_running.is_set():
+        raise RuntimeError("MANUAL already running")
+    demo_running.set()
+    stop_requested.clear()
+    with _client_conn_lock:
+        # uchováme si (neexkluzivně) referenci – workflow poběží i po odpojení
+        _client_conn = client_conn
+    t = threading.Thread(target=_demo_workflow, daemon=True)
+    t.start()
+
+def stop_demo_workflow():
     log_event("STOP requested.")
     stop_requested.set()
     send_command(PORT_CAMERA, "STOP", expect_response=False)

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SERVICE_FILE="/etc/systemd/system/journey.service"
+SERVICE_FILE="/etc/systemd/system/robot-journey.service"
 LOG_DIR="/data/logs/journey"
 LOG_FILE="$LOG_DIR/journey.log"
 
@@ -9,7 +9,7 @@ mkdir -p "$LOG_DIR"
 touch "$LOG_FILE"
 chmod 664 "$LOG_FILE"
 
-echo "🛠️ Vytvářím systemd službu: journey.service"
+echo "🛠️ Vytvářím systemd službu: robot-journey.service"
 
 sudo tee "$SERVICE_FILE" > /dev/null <<EOF
 [Unit]
@@ -40,8 +40,8 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
-echo "🔁 Aktivuji službu journey.service"
+echo "🔁 Aktivuji službu robot-journey.service"
 sudo systemctl daemon-reexec
 sudo systemctl daemon-reload
-sudo systemctl enable --now journey.service
+sudo systemctl enable --now robot-journey.service
 echo "   tail -f $LOG_FILE"
