@@ -22,3 +22,6 @@ Thumbs.db
 **/bin/
 **/build/
 server/robot_lidar_tcp
+
+# archyves
+*.zip
