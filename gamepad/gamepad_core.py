@@ -100,7 +100,7 @@ def compute_wheels_from_axes():
 
 def compute_drive_from_axes():
     global left_wheel, right_wheel
-    speed = apply_deadzone_int(scale_to_int(axes['axis_4'], 50)+50, DEADZONE_SPEED)  # vert
+    speed = apply_deadzone_int(scale_to_int(axes['axis_4'], 40)+40, DEADZONE_SPEED)  # vert
     steer = scale_to_int(axes['axis_2'], STEER_RANGE)                               # horiz
     left_wheel  = clamp(speed + steer, 0, 100)
     right_wheel = clamp(speed - steer, 0, 100)
