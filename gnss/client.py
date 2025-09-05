@@ -37,6 +37,10 @@ def handle_client(conn, addr, shutdown_flag):
                         fix = gnss_device.get_fix()
                         conn.sendall((fix + "\n").encode())
 
+                    elif cmd == "STOP":
+                        gnss_device.stop()
+                        conn.sendall(b"OK\n")
+
                     elif cmd == "EXIT":
                         conn.sendall(b"BYE\n")
                         return

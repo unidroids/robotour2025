@@ -3,6 +3,7 @@ import socket
 import threading
 import signal
 from client import handle_client
+from device import gnss_device   # <- přidáme import
 
 HOST = "127.0.0.1"
 PORT = 9006
@@ -39,14 +40,19 @@ def start_server():
     except Exception as e:
         print(f"Chyba serveru: {e}")
     finally:
+        print("🛑 Ukoncuji server, zastavuji GNSS...")
         try:
             server.close()
         except Exception:
             pass
+
+        # --- zastav GNSS vycitani ---
+        gnss_device.stop()
+
         with client_threads_lock:
             for t in client_threads:
                 t.join(timeout=1.0)
-        print("🛑 GNSS server ukoncen.")
+        print("✅ GNSS server korektne ukoncen.")
 
 if __name__ == "__main__":
     start_server()
