@@ -1,5 +1,6 @@
 # client.py
 import traceback
+import json
 from device import gnss_device
 
 def handle_client(conn, addr, shutdown_flag):
@@ -17,13 +18,16 @@ def handle_client(conn, addr, shutdown_flag):
                     if not cmd:
                         continue
 
-                    # --- zakladni prikazy ---
                     if cmd == "PING":
                         conn.sendall(b"PONG\n")
 
                     elif cmd == "START":
                         ok = gnss_device.start()
                         conn.sendall(b"OK\n" if ok else b"ERROR start\n")
+
+                    elif cmd == "STOP":
+                        gnss_device.stop()
+                        conn.sendall(b"OK\n")
 
                     elif cmd == "STATE":
                         state = gnss_device.get_state()
@@ -35,11 +39,8 @@ def handle_client(conn, addr, shutdown_flag):
 
                     elif cmd == "DATA":
                         fix = gnss_device.get_fix()
-                        conn.sendall((fix + "\n").encode())
-
-                    elif cmd == "STOP":
-                        gnss_device.stop()
-                        conn.sendall(b"OK\n")
+                        # Serializace do JSON
+                        conn.sendall((json.dumps(fix) + "\n").encode())
 
                     elif cmd == "EXIT":
                         conn.sendall(b"BYE\n")

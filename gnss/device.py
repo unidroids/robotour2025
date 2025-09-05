@@ -2,7 +2,7 @@
 import serial, threading, time
 from ubx import build_msg, parse_stream, parse_nav_pvt
 
-# CFG-MSGOUT klíče (jen USB)
+# CFG-MSGOUT klíče (USB)
 CFG_NAV_PVT_USB = 0x20910009
 CFG_NAV_SAT_USB = 0x20910018
 
@@ -17,14 +17,36 @@ class GNSSDevice:
         self.last_fix = None
         self.last_state = None
 
+    def _wait_for_ack(self, cls_id, msg_id, timeout=1.0):
+        """Čeká na UBX-ACK pro danou zprávu"""
+        deadline = time.time() + timeout
+        buf = b""
+        while time.time() < deadline:
+            data = self.port.read(256)
+            if not data:
+                continue
+            buf += data
+            while True:
+                mc, mi, payload, buf = parse_stream(buf)
+                if mc is None:
+                    break
+                if mc == 0x05:  # ACK
+                    if mi == 0x01:  # ACK-ACK
+                        print("✅ ACK-ACK přijato")
+                        return True
+                    elif mi == 0x00:  # ACK-NAK
+                        print("❌ ACK-NAK přijato")
+                        return False
+        print("⚠️ ACK timeout")
+        return False
+
     def start(self):
         if self.running:
             return True
         for dev in ["/dev/gnss1", "/dev/gnss2"]:
             try:
-                ser = serial.Serial(dev, baudrate=38400, timeout=1)
-                # identifikace přes MON-VER
-                ser.write(build_msg(0x0A, 0x04))
+                ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
+                ser.write(build_msg(0x0A, 0x04))  # MON-VER
                 data = ser.read(200)
                 if b"F9R" in data:
                     self.device_type = "F9R"
@@ -40,22 +62,24 @@ class GNSSDevice:
         if not self.port:
             return False
 
-        # --- nastavení výstupu jen UBX, NAV-PVT 10Hz, NAV-SAT 1Hz ---
-        # UBX-CFG-VALSET (0x06 0x8A)
+        # --- nastavení výstupu ---
         cfg_payload = bytearray()
         cfg_payload += b"\x00"      # version
-        cfg_payload += b"\x01"      # layers=RAM only
+        cfg_payload += b"\x01"      # RAM only
         cfg_payload += b"\x00\x00"  # reserved
 
-        # NAV-PVT USB = 10
+        # NAV-PVT USB = 10 Hz
         cfg_payload += CFG_NAV_PVT_USB.to_bytes(4, "little")
         cfg_payload += (10).to_bytes(1, "little")
 
-        # NAV-SAT USB = 1
+        # NAV-SAT USB = 1 Hz
         cfg_payload += CFG_NAV_SAT_USB.to_bytes(4, "little")
         cfg_payload += (1).to_bytes(1, "little")
 
-        self.port.write(build_msg(0x06, 0x8A, cfg_payload))
+        msg = build_msg(0x06, 0x8A, cfg_payload)
+        self.port.write(msg)
+        if not self._wait_for_ack(0x06, 0x8A):
+            print("⚠️ Konfigurace nebyla potvrzena")
 
         # spustit reader thread
         self.stop_event.clear()
@@ -109,12 +133,8 @@ class GNSSDevice:
 
     def get_fix(self):
         if not self.running:
-            return "ERROR not running"
+            return {"error": "not running"}
         with self.lock:
-            if not self.last_fix:
-                return "NOFIX"
-            f = self.last_fix
-        return f"lat={f['lat']:.7f} lon={f['lon']:.7f} alt={f['alt']:.2f}m " \
-               f"head={f['heading']:.2f} speed={f['speed']:.2f}m/s sat={f['numSV']}"
+            return self.last_fix if self.last_fix else {"error": "NOFIX"}
 
 gnss_device = GNSSDevice()
