@@ -25,5 +25,5 @@ server/robot_lidar_tcp
 
 # archyves
 *.zip
-
+*.geojson
 *.graphml
