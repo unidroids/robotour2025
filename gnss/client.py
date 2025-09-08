@@ -1,4 +1,4 @@
-# client.py
+# client.py – socket handler pro GNSS
 import traceback
 import json
 from device import gnss_device
@@ -31,15 +31,14 @@ def handle_client(conn, addr, shutdown_flag):
 
                     elif cmd == "STATE":
                         state = gnss_device.get_state()
-                        conn.sendall((state + "\n").encode())
+                        conn.sendall((json.dumps(state) + "\n").encode())
 
                     elif cmd == "CALIBRATE":
-                        status = gnss_device.calibrate()
-                        conn.sendall((status + "\n").encode())
+                        # TODO: doplnit pro F9R (IMU), zatím placeholder
+                        conn.sendall(b"NOT_IMPLEMENTED\n")
 
                     elif cmd == "DATA":
                         fix = gnss_device.get_fix()
-                        # Serializace do JSON
                         conn.sendall((json.dumps(fix) + "\n").encode())
 
                     elif cmd == "EXIT":

@@ -1,98 +1,109 @@
 # device.py – GNSS zařízení pro Robotour
-import serial, threading, time
+import serial
+import struct
+import threading
+import time
 from ubx import build_msg, parse_stream, parse_nav_pvt
 
-# CFG-MSGOUT klíče (USB)
-CFG_NAV_PVT_USB = 0x20910009
-CFG_NAV_SAT_USB = 0x20910018
-
-def build_valset_payload():
-    payload = bytearray()
-    payload += b"\x00"      # version
-    payload += b"\x01"      # layers = RAM
-    payload += b"\x00\x00"  # reserved
-
-    # --- CFG-USBOUTPROT-UBX = 1 ---
-    payload += (0x10780001).to_bytes(4, "little")
-    payload += (1).to_bytes(1, "little")
-
-    # --- CFG-USBOUTPROT-NMEA = 0 ---
-    payload += (0x10780002).to_bytes(4, "little")
-    payload += (0).to_bytes(1, "little")
-
-    # --- NAV-PVT USB = 10 ---
-    payload += (0x20910009).to_bytes(4, "little")
-    payload += (10).to_bytes(1, "little")
-
-    # --- NAV-SAT USB = 1 ---
-    payload += (0x20910018).to_bytes(4, "little")
-    payload += (1).to_bytes(1, "little")
-
-    return payload
-
-def build_valset_payload_for_10hz():
-    p = bytearray()
-    p += b"\x00"      # version
-    p += b"\x01"      # layers = RAM (1)
-    p += b"\x00\x00"  # reserved
-
-    # --- Navigační perioda (měřicí rate) = 100 ms (10 Hz) ---
-    p += (0x30210001).to_bytes(4, "little")  # CFG-RATE-MEAS (ms)
-    p += (100).to_bytes(2, "little")         # U2
-
-    # (volitelné) navRate=1 (1 cyklus na epochu), timeRef=GPS
-    p += (0x30210002).to_bytes(4, "little")  # CFG-RATE-NAV (cycles)
-    p += (1).to_bytes(2, "little")
-    p += (0x30210003).to_bytes(4, "little")  # CFG-RATE-TIMEREF
-    p += (1).to_bytes(1, "little")           # 0=UTC, 1=GPS (viz tvoje FW)
-
-    return p    
+# CFG-MSGOUT klíče (USB) – UBX-CFG-VALSET
+CFG_USBOUT_UBX = 0x10780001          # CFG-USBOUTPROT-UBX (U1)
+CFG_USBOUT_NMEA = 0x10780002         # CFG-USBOUTPROT-NMEA (U1)
+CFG_MSGOUT_NAV_PVT_USB = 0x20910009  # U1: 1 = každou epochu
+CFG_MSGOUT_NAV_SAT_USB = 0x20910018  # U1: 10 = každá 10. epocha
 
 class GNSSDevice:
     def __init__(self):
         self.port = None
         self.running = False
-        self.device_type = None
+        self.device_type = None  # "F9R" / "D9S" / None
         self.lock = threading.Lock()
         self.reader_thread = None
         self.stop_event = threading.Event()
-        self.last_fix = None
-        self.last_state = None
-        self.msg_counter = 0
-        self.bad_counter = 0
-        self.ignored_counter = 0        
 
-    def _wait_for_ack(self, cls_id, msg_id, timeout=1.0):
-        """Čeká na UBX-ACK pro danou zprávu"""
+        self.last_fix = None        # dict z NAV-PVT
+        self.last_state = None      # textový quick-stav
+        self.msg_counter = 0
+        self.bad_counter = 0        # CRC fail
+        self.ignored_counter = 0    # jiné chyby/bufferové odřezky
+
+    # ---------- Konfigurace ----------
+
+    def _build_valset_payload(self):
+        """
+        Nastaví do RAM:
+         - USB protokoly: UBX=1, NMEA=0
+         - MSGOUT: NAV-PVT každou epochu (1), NAV-SAT každou 10. epochu (10)
+        Navigační perioda (10 Hz) se řeší zvlášť přes legacy CFG-RATE.
+        """
+        p = bytearray()
+        p += b"\x00"      # version
+        p += b"\x01"      # layers = RAM
+        p += b"\x00\x00"  # reserved
+
+        # Protokoly na USB
+        p += (CFG_USBOUT_UBX).to_bytes(4, "little");   p += (1).to_bytes(1, "little")
+        p += (CFG_USBOUT_NMEA).to_bytes(4, "little");  p += (0).to_bytes(1, "little")
+
+        # Výstupní zprávy
+        p += (CFG_MSGOUT_NAV_PVT_USB).to_bytes(4, "little"); p += (1).to_bytes(1, "little")
+        p += (CFG_MSGOUT_NAV_SAT_USB).to_bytes(4, "little"); p += (10).to_bytes(1, "little")
+
+        return p
+
+    def _build_cfg_rate_payload_10hz(self):
+        """
+        UBX-CFG-RATE (class 0x06, id 0x08):
+          measRate = 100 ms (10 Hz)
+          navRate  = 1   (počet cyklů na epochu)
+          timeRef  = 1   (GPS time)
+        """
+        measRate_ms = 100
+        navRate = 1
+        timeRef = 1
+        return struct.pack("<HHH", measRate_ms, navRate, timeRef)
+
+    def _wait_for_ack(self, expect_cls, expect_id, timeout=1.0):
+        """
+        Čeká na ACK-ACK/ACK-NAK k dané zprávě (expect_cls/expect_id).
+        UBX-ACK-* payload = [clsID(1), msgID(1)]
+        """
         deadline = time.time() + timeout
         buf = b""
         while time.time() < deadline:
-            data = self.port.read(256)
-            if not data:
+            chunk = self.port.read(256)
+            if not chunk:
                 continue
-            buf += data
+            buf += chunk
             while True:
                 mc, mi, payload, buf = parse_stream(buf)
                 if mc is None:
                     break
-                if mc == 0x05:  # ACK
-                    if mi == 0x01:  # ACK-ACK
-                        print("✅ ACK-ACK přijato")
-                        return True
-                    elif mi == 0x00:  # ACK-NAK
-                        print("❌ ACK-NAK přijato")
-                        return False
+                # ACK
+                if mc == 0x05 and len(payload) >= 2:
+                    ack_cls = payload[0]
+                    ack_id  = payload[1]
+                    if ack_cls == expect_cls and ack_id == expect_id:
+                        if mi == 0x01:
+                            print("✅ ACK-ACK přijato")
+                            return True
+                        elif mi == 0x00:
+                            print("❌ ACK-NAK přijato")
+                            return False
         print("⚠️ ACK timeout")
         return False
+
+    # ---------- Životní cyklus ----------
 
     def start(self):
         if self.running:
             return True
+
+        # 1) Vyber port podle MON-VER
         for dev in ["/dev/gnss1", "/dev/gnss2"]:
             try:
                 ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
                 ser.write(build_msg(0x0A, 0x04))  # MON-VER
-                data = ser.read(200)
+                data = ser.read(300)
                 if b"F9R" in data:
                     self.device_type = "F9R"
                     self.port = ser
@@ -104,21 +115,23 @@ class GNSSDevice:
                 ser.close()
             except Exception:
                 continue
+
         if not self.port:
             return False
 
-        # --- nastavení výstupu ---
-        msg = build_msg(0x06, 0x8A, build_valset_payload())
-        self.port.write(msg)
+        # 2) VALSET: USB protokoly + MSGOUT (RAM)
+        valset = build_msg(0x06, 0x8A, self._build_valset_payload())
+        self.port.write(valset)
         if not self._wait_for_ack(0x06, 0x8A):
-            print("⚠️ Konfigurace A nebyla potvrzena")
+            print("⚠️ Konfigurace A (VALSET) nebyla potvrzena")
 
-        msg = build_msg(0x06, 0x8A, build_valset_payload_for_10hz())
-        self.port.write(msg)
-        if not self._wait_for_ack(0x06, 0x8A):
-            print("⚠️ Konfigurace B nebyla potvrzena")
+        # 3) CFG-RATE: 10 Hz (legacy, bývá spolehlivější – řeší „Speed“ NAK)
+        rate = build_msg(0x06, 0x08, self._build_cfg_rate_payload_10hz())
+        self.port.write(rate)
+        if not self._wait_for_ack(0x06, 0x08):
+            print("⚠️ Nastavení rychlosti (CFG-RATE) nebylo potvrzeno")
 
-        # spustit reader thread
+        # 4) Spusť reader thread
         self.stop_event.clear()
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
@@ -131,13 +144,18 @@ class GNSSDevice:
         self.stop_event.set()
         if self.reader_thread:
             self.reader_thread.join(2.0)
-        try: self.port.close()
-        except: pass
+        try:
+            self.port.close()
+        except Exception:
+            pass
         self.running = False
         self.device_type = None
-        self.last_fix = None
-        self.last_state = None
+        with self.lock:
+            self.last_fix = None
+            self.last_state = None
         print("🛑 GNSS stop")
+
+    # ---------- Reader & stav ----------
 
     def _reader_loop(self):
         buf = b""
@@ -146,33 +164,41 @@ class GNSSDevice:
                 data = self.port.read(1024)
                 if not data:
                     continue
+                buf_before = len(buf)
                 buf += data
+
                 while True:
-                    msg_class, msg_id, payload, buf_new = parse_stream(buf)
+                    msg_class, msg_id, payload, new_buf = parse_stream(buf)
                     if msg_class is None:
-                        # pokud se buffer zkrátil, znamená to CRC fail
-                        if len(buf_new) < len(buf):
+                        # CRC fail rozpoznáme porovnáním délky (parse_stream posouvá o 2 na CRC fail)
+                        if len(new_buf) < len(buf):
                             self.bad_counter += 1
                             ts = time.strftime("%H:%M:%S")
                             print(f"[{ts}] ⚠️ CRC fail, bad={self.bad_counter}")
+                        buf = new_buf
                         break
 
-                    buf = buf_new
+                    # posun
+                    buf = new_buf
+
+                    # log
                     self.msg_counter += 1
                     ts = time.strftime("%H:%M:%S")
                     print(f"[{ts}] UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)}")
 
-                    if msg_class == 0x01 and msg_id == 0x07:  # NAV-PVT
+                    # NAV-PVT
+                    if msg_class == 0x01 and msg_id == 0x07:
                         fix = parse_nav_pvt(payload)
                         if fix:
                             with self.lock:
                                 self.last_fix = fix
-                                self.last_state = f"sat={fix['numSV']} fix={fix['fixType']}"
+                                self.last_state = f"sat={fix['numSV']} fixType={fix['fixType']}"
+
             except Exception as e:
                 self.ignored_counter += 1
                 ts = time.strftime("%H:%M:%S")
                 print(f"[{ts}] ⚠️ Reader error: {e}, ignored={self.ignored_counter}")
-                time.sleep(0.01)
+                time.sleep(0.3)
 
     def get_state(self):
         if not self.running:
@@ -187,11 +213,11 @@ class GNSSDevice:
                 "ignored": self.ignored_counter,
             }
 
-
     def get_fix(self):
         if not self.running:
             return {"error": "not running"}
         with self.lock:
             return self.last_fix if self.last_fix else {"error": "NOFIX"}
+
 
 gnss_device = GNSSDevice()
