@@ -139,15 +139,3 @@ ax.set_title("Buchlovice – cesty (barva dle typu, tloušťka dle šířky) + m
 ax.set_axis_off()
 plt.tight_layout()
 plt.show()
-
-# === 6) (Volitelné) Export do GeoJSON ===
-# Uložíme jen to, co je praktické pro plánování: edges s příznakem bariéry a body bariér
-# Pozn.: GeoJSON je limitován na WGS84, proto reproject zpět na EPSG:4326.
-try:
-    edges_out = edges[["u","v","key","highway_norm","width_eff_m","has_point_barrier","geometry"]].to_crs(4326)
-    edges_out.to_file("cesty_edges.geojson", driver="GeoJSON")
-    if len(barriers):
-        barriers.to_crs(4326).to_file("bariery_point.geojson", driver="GeoJSON")
-    print("Uloženo: cesty_edges.geojson", ("a bariery_point.geojson" if len(barriers) else "(bez bariér)"))
-except Exception as e:
-    print("Export GeoJSON přeskočen:", e)
