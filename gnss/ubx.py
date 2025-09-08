@@ -63,3 +63,5 @@ def parse_nav_pvt(payload: bytes):
         "hAcc": hAcc,
         "vAcc": vAcc
     }
+
+
