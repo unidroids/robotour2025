@@ -65,3 +65,43 @@ def parse_nav_pvt(payload: bytes):
     }
 
 
+# ---------------------- ESF-MEAS ----------------------
+
+def build_esf_meas_speed(speed_mps: float, time_tag: int = 0):
+    """
+    UBX-ESF-MEAS s jedním měřením – vehicle speed
+    speed_mps ... rychlost v m/s
+    """
+    speed_mm = int(speed_mps * 1000)  # mm/s
+    payload = b""
+    payload += time_tag.to_bytes(4, "little")  # timeTag
+    payload += (0).to_bytes(1, "little")       # flags
+    payload += (0).to_bytes(1, "little")       # id
+    payload += (1).to_bytes(2, "little")       # dataCount
+    payload += speed_mm.to_bytes(4, "little", signed=True)  # data
+    payload += (0x20).to_bytes(2, "little")    # dataType = vehicle speed
+    return build_msg(0x10, 0x02, payload)
+
+def build_esf_meas_ticks(left_ticks: int, right_ticks: int, time_tag: int = 0):
+    """
+    UBX-ESF-MEAS se dvěma měřeními – wheel ticks left/right
+    Tick counts = kumulativní čítač od začátku (signed 32b)
+    """
+    payload = b""
+    payload += time_tag.to_bytes(4, "little")  # timeTag
+    payload += (0).to_bytes(1, "little")       # flags
+    payload += (0).to_bytes(1, "little")       # id
+    payload += (2).to_bytes(2, "little")       # dataCount
+
+    # left wheel
+    payload += left_ticks.to_bytes(4, "little", signed=True)
+    payload += (0x00).to_bytes(2, "little")    # dataType = wheel tick sensor 0
+
+    # right wheel
+    payload += right_ticks.to_bytes(4, "little", signed=True)
+    payload += (0x01).to_bytes(2, "little")    # dataType = wheel tick sensor 1
+
+    return build_msg(0x10, 0x02, payload)
+
+
+    

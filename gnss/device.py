@@ -10,6 +10,14 @@ CFG_USBOUT_UBX = 0x10780001          # CFG-USBOUTPROT-UBX (U1)
 CFG_USBOUT_NMEA = 0x10780002         # CFG-USBOUTPROT-NMEA (U1)
 CFG_MSGOUT_NAV_PVT_USB = 0x20910009  # U1: 1 = každou epochu
 CFG_MSGOUT_NAV_SAT_USB = 0x20910018  # U1: 10 = každá 10. epocha
+# --- CFG-RATE klíče (VALSET) ---
+CFG_RATE_MEAS     = 0x30210001  # U2, jednotky 1 ms
+CFG_RATE_NAV      = 0x30210002  # U2, "solutions per measurement"
+CFG_RATE_TIMEREF  = 0x20210003  # U1, 0=UTC, 1=GPS, ...
+CFG_RATE_NAV_PRIO = 0x20210004  # U1, Hz (priority navigation rate)
+
+CFG_NAVSPG_DYNMODEL = 0x20110021  # key ID podle u-blox interface description
+
 
 class GNSSDevice:
     def __init__(self):
@@ -28,36 +36,84 @@ class GNSSDevice:
 
     # ---------- Konfigurace ----------
 
-    def _build_valset_payload(self):
+    def _build_valset_payload_data(self):
         """
         Nastaví do RAM:
-         - USB protokoly: UBX=1, NMEA=0
-         - MSGOUT: NAV-PVT každou epochu (1), NAV-SAT každou 10. epochu (10)
-        Navigační perioda (10 Hz) se řeší zvlášť přes legacy CFG-RATE.
+        - USB protokoly: UBX=1, NMEA=0
+        - MSGOUT: NAV-PVT 1x/epochu, NAV-SAT 1x/10 epoch
+        - NAV priority mode (CFG-RATE-NAV_PRIO) = 30 Hz
+        - Měřící/navigační periodu (CFG-RATE-MEAS = 33 ms, CFG-RATE-NAV = 1)
+        + timeRef = GPS
         """
         p = bytearray()
         p += b"\x00"      # version
         p += b"\x01"      # layers = RAM
         p += b"\x00\x00"  # reserved
 
-        # Protokoly na USB
+        # --- Protokoly na USB ---
         p += (CFG_USBOUT_UBX).to_bytes(4, "little");   p += (1).to_bytes(1, "little")
         p += (CFG_USBOUT_NMEA).to_bytes(4, "little");  p += (0).to_bytes(1, "little")
 
-        # Výstupní zprávy
+        # --- Výstupní zprávy (počet na navigační epochu) ---
         p += (CFG_MSGOUT_NAV_PVT_USB).to_bytes(4, "little"); p += (1).to_bytes(1, "little")
-        p += (CFG_MSGOUT_NAV_SAT_USB).to_bytes(4, "little"); p += (10).to_bytes(1, "little")
+        # p += (CFG_MSGOUT_NAV_SAT_USB).to_bytes(4, "little"); p += (10).to_bytes(1, "little")
+
+        p += (CFG_NAVSPG_DYNMODEL).to_bytes(4, "little"); p += (11).to_bytes(1, "little")   # 11 = E-scooter
+
+        # --- Priority navigation mode & rychlost 30 Hz ---
+        # p += (CFG_RATE_NAV_PRIO).to_bytes(4, "little"); p += (30).to_bytes(1, "little")
+
+        # # --- Měřicí/navigační perioda (≈30 Hz) & timeRef ---
+        # # MEAS = 33 ms, NAV = 1, TIMEREF = GPS(1)
+        # p += (CFG_RATE_MEAS).to_bytes(4, "little");    p += (33).to_bytes(2, "little")  # U2
+        # p += (CFG_RATE_NAV).to_bytes(4, "little");     p += (1).to_bytes(2, "little")   # U2
+        # p += (CFG_RATE_TIMEREF).to_bytes(4, "little"); p += (1).to_bytes(1, "little")   # U1
+
+        return p
+
+    def _build_cfg_hnr_payload_30hz(self):
+        """
+        UBX-CFG-HNR (class 0x06, id 0x5C) – nastavení High Navigation Rate.
+        highNavRate = 30 (Hz)
+        Zbytek rezervovaný (0).
+        """
+        highNavRate = 30
+        # Podle F9R: payload má 4 bajty (U1 rate + 3×reserved).
+        return struct.pack("<BBBB", highNavRate, 0, 0, 0)
+
+    def _build_valset_payload_speed(self):
+        """
+        Nastaví do RAM:
+        - USB protokoly: UBX=1, NMEA=0
+        - MSGOUT: NAV-PVT 1x/epochu, NAV-SAT 1x/10 epoch
+        - NAV priority mode (CFG-RATE-NAV_PRIO) = 30 Hz
+        - Měřící/navigační periodu (CFG-RATE-MEAS = 33 ms, CFG-RATE-NAV = 1)
+        + timeRef = GPS
+        """
+        p = bytearray()
+        p += b"\x00"      # version
+        p += b"\x01"      # layers = RAM
+        p += b"\x00\x00"  # reserved
+
+
+        # # --- Měřicí/navigační perioda (≈10 Hz) & timeRef ---
+        # # MEAS = 100 ms, NAV = 1, TIMEREF = GPS(1)
+        p += (CFG_RATE_MEAS).to_bytes(4, "little");    p += (100).to_bytes(2, "little")  # U2
+        p += (CFG_RATE_NAV).to_bytes(4, "little");     p += (1).to_bytes(2, "little")   # U2
+        p += (CFG_RATE_TIMEREF).to_bytes(4, "little"); p += (0).to_bytes(1, "little")   # U1
+        # --- Priority navigation mode & rychlost 10 Hz ---
+        #p += (CFG_RATE_NAV_PRIO).to_bytes(4, "little"); p += (0).to_bytes(1, "little")
 
         return p
 
     def _build_cfg_rate_payload_10hz(self):
         """
-        UBX-CFG-RATE (class 0x06, id 0x08):
-          measRate = 100 ms (10 Hz)
-          navRate  = 1   (počet cyklů na epochu)
-          timeRef  = 1   (GPS time)
+        POZOR: Historický název, ale nastavujeme ~30 Hz:
+        measRate = 33 ms (≈30 Hz)
+        navRate  = 1
+        timeRef  = 1 (GPS time)
         """
-        measRate_ms = 100
+        measRate_ms = 33
         navRate = 1
         timeRef = 1
         return struct.pack("<HHH", measRate_ms, navRate, timeRef)
@@ -101,7 +157,8 @@ class GNSSDevice:
         # 1) Vyber port podle MON-VER
         for dev in ["/dev/gnss1", "/dev/gnss2"]:
             try:
-                ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
+                #ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
+                ser = serial.Serial(dev, baudrate=115200, timeout=0.2)
                 ser.write(build_msg(0x0A, 0x04))  # MON-VER
                 data = ser.read(300)
                 if b"F9R" in data:
@@ -120,16 +177,16 @@ class GNSSDevice:
             return False
 
         # 2) VALSET: USB protokoly + MSGOUT (RAM)
-        valset = build_msg(0x06, 0x8A, self._build_valset_payload())
+        valset = build_msg(0x06, 0x8A, self._build_valset_payload_data())
         self.port.write(valset)
         if not self._wait_for_ack(0x06, 0x8A):
-            print("⚠️ Konfigurace A (VALSET) nebyla potvrzena")
+            print("⚠️ Konfigurace data nebyla potvrzena")
 
-        # 3) CFG-RATE: 10 Hz (legacy, bývá spolehlivější – řeší „Speed“ NAK)
-        rate = build_msg(0x06, 0x08, self._build_cfg_rate_payload_10hz())
-        self.port.write(rate)
-        if not self._wait_for_ack(0x06, 0x08):
-            print("⚠️ Nastavení rychlosti (CFG-RATE) nebylo potvrzeno")
+        # # 3) CFG-RATE: 10 Hz (legacy, bývá spolehlivější – řeší „Speed“ NAK)
+        # rate = build_msg(0x06, 0x08, self._build_valset_payload_speed())
+        # self.port.write(rate)
+        # if not self._wait_for_ack(0x06, 0x08):
+        #     print("⚠️ Nastavení rychlosti nebyla potvrzena")
 
         # 4) Spusť reader thread
         self.stop_event.clear()
@@ -184,7 +241,7 @@ class GNSSDevice:
                     # log
                     self.msg_counter += 1
                     ts = time.strftime("%H:%M:%S")
-                    print(f"[{ts}] UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)}")
+                    #print(f"[{ts}] UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)}")
 
                     # NAV-PVT
                     if msg_class == 0x01 and msg_id == 0x07:
