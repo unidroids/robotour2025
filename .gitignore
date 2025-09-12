@@ -34,3 +34,7 @@ gnss/point_perfect/*.ubx
 
 # env data
 **/.env
+
+# chace
+**/cache/
+osm/prototype/cache/
