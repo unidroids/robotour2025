@@ -2,6 +2,10 @@
 import traceback
 import json
 from device import gnss_device
+from ubx import build_esf_meas_ticks
+
+import binascii
+import base64
 
 def handle_client(conn, addr, shutdown_flag):
     try:
@@ -41,6 +45,43 @@ def handle_client(conn, addr, shutdown_flag):
                         fix = gnss_device.get_fix()
                         conn.sendall((json.dumps(fix) + "\n").encode())
 
+                    elif cmd.startswith("ODO "):
+                        # Formát: ODO %08X %08X %01X %08X %01X
+                        try:
+                            _, t_hex, l_hex, ld_hex, r_hex, rd_hex = cmd.split()
+                            time_tag = int(t_hex, 16) & 0xFFFFFFFF
+                            l_ticks  = int(l_hex, 16) & 0xFFFFFFFF
+                            l_dir    = int(ld_hex, 16) & 0x1
+                            r_ticks  = int(r_hex, 16) & 0xFFFFFFFF
+                            r_dir    = int(rd_hex, 16) & 0x1
+
+                            # vytvoří UBX-ESF-MEAS zprávu (2x wheel ticks)
+                            msg = build_esf_meas_ticks(time_tag, l_ticks, l_dir, r_ticks, r_dir)
+
+                            # vložíme do odesílací fronty GNSS zařízení
+                            gnss_device.enqueue_raw(msg)
+
+                            conn.sendall(b"OK\n")
+                        except Exception as e:
+                            conn.sendall(f"ERR ODO {e}\n".encode())
+
+                    elif cmd.startswith("PERFECT "):
+                        # PERFECT <payload>
+                        # payload může být:
+                        # 1) čistý hex řetězec (doporučeno), např. "D30100..."
+                        # 2) base64 pokud začne prefixem "b64:"
+                        try:
+                            payload_str = cmd.split(" ", 1)[1].strip()
+                            if payload_str.startswith("b64:"):
+                                raw = base64.b64decode(payload_str[4:], validate=True)
+                            else:
+                                # odstraníme případné mezery
+                                payload_str = payload_str.replace(" ", "")
+                                raw = binascii.unhexlify(payload_str)
+                            gnss_device.enqueue_raw(raw)
+                            conn.sendall(b"OK\n")
+                        except Exception as e:
+                            conn.sendall(f"ERR PERFECT {e}\n".encode())
                     elif cmd == "EXIT":
                         conn.sendall(b"BYE\n")
                         return

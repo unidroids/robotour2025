@@ -3,7 +3,8 @@ import serial
 import struct
 import threading
 import time
-from ubx import build_msg, parse_stream, parse_nav_pvt
+import queue
+from ubx import build_msg, parse_stream, parse_nav_pvt,build_esf_meas_ticks
 
 # CFG-MSGOUT klíče (USB) – UBX-CFG-VALSET
 CFG_USBOUT_UBX = 0x10780001          # CFG-USBOUTPROT-UBX (U1)
@@ -34,6 +35,9 @@ class GNSSDevice:
         self.bad_counter = 0        # CRC fail
         self.ignored_counter = 0    # jiné chyby/bufferové odřezky
 
+        self.tx_queue = queue.Queue()
+        self.writer_thread = None        
+
     # ---------- Konfigurace ----------
 
     def _build_valset_payload_data(self):
@@ -58,65 +62,9 @@ class GNSSDevice:
         p += (CFG_MSGOUT_NAV_PVT_USB).to_bytes(4, "little"); p += (1).to_bytes(1, "little")
         # p += (CFG_MSGOUT_NAV_SAT_USB).to_bytes(4, "little"); p += (10).to_bytes(1, "little")
 
-        p += (CFG_NAVSPG_DYNMODEL).to_bytes(4, "little"); p += (11).to_bytes(1, "little")   # 11 = E-scooter
-
-        # --- Priority navigation mode & rychlost 30 Hz ---
-        # p += (CFG_RATE_NAV_PRIO).to_bytes(4, "little"); p += (30).to_bytes(1, "little")
-
-        # # --- Měřicí/navigační perioda (≈30 Hz) & timeRef ---
-        # # MEAS = 33 ms, NAV = 1, TIMEREF = GPS(1)
-        # p += (CFG_RATE_MEAS).to_bytes(4, "little");    p += (33).to_bytes(2, "little")  # U2
-        # p += (CFG_RATE_NAV).to_bytes(4, "little");     p += (1).to_bytes(2, "little")   # U2
-        # p += (CFG_RATE_TIMEREF).to_bytes(4, "little"); p += (1).to_bytes(1, "little")   # U1
+        p += (CFG_NAVSPG_DYNMODEL).to_bytes(4, "little"); p += (11).to_bytes(1, "little")   # 11 = mower
 
         return p
-
-    def _build_cfg_hnr_payload_30hz(self):
-        """
-        UBX-CFG-HNR (class 0x06, id 0x5C) – nastavení High Navigation Rate.
-        highNavRate = 30 (Hz)
-        Zbytek rezervovaný (0).
-        """
-        highNavRate = 30
-        # Podle F9R: payload má 4 bajty (U1 rate + 3×reserved).
-        return struct.pack("<BBBB", highNavRate, 0, 0, 0)
-
-    def _build_valset_payload_speed(self):
-        """
-        Nastaví do RAM:
-        - USB protokoly: UBX=1, NMEA=0
-        - MSGOUT: NAV-PVT 1x/epochu, NAV-SAT 1x/10 epoch
-        - NAV priority mode (CFG-RATE-NAV_PRIO) = 30 Hz
-        - Měřící/navigační periodu (CFG-RATE-MEAS = 33 ms, CFG-RATE-NAV = 1)
-        + timeRef = GPS
-        """
-        p = bytearray()
-        p += b"\x00"      # version
-        p += b"\x01"      # layers = RAM
-        p += b"\x00\x00"  # reserved
-
-
-        # # --- Měřicí/navigační perioda (≈10 Hz) & timeRef ---
-        # # MEAS = 100 ms, NAV = 1, TIMEREF = GPS(1)
-        p += (CFG_RATE_MEAS).to_bytes(4, "little");    p += (100).to_bytes(2, "little")  # U2
-        p += (CFG_RATE_NAV).to_bytes(4, "little");     p += (1).to_bytes(2, "little")   # U2
-        p += (CFG_RATE_TIMEREF).to_bytes(4, "little"); p += (0).to_bytes(1, "little")   # U1
-        # --- Priority navigation mode & rychlost 10 Hz ---
-        #p += (CFG_RATE_NAV_PRIO).to_bytes(4, "little"); p += (0).to_bytes(1, "little")
-
-        return p
-
-    def _build_cfg_rate_payload_10hz(self):
-        """
-        POZOR: Historický název, ale nastavujeme ~30 Hz:
-        measRate = 33 ms (≈30 Hz)
-        navRate  = 1
-        timeRef  = 1 (GPS time)
-        """
-        measRate_ms = 33
-        navRate = 1
-        timeRef = 1
-        return struct.pack("<HHH", measRate_ms, navRate, timeRef)
 
     def _wait_for_ack(self, expect_cls, expect_id, timeout=1.0):
         """
@@ -148,7 +96,45 @@ class GNSSDevice:
         print("⚠️ ACK timeout")
         return False
 
+
+    def _start_writer(self):
+        if self.writer_thread and self.writer_thread.is_alive():
+            return
+        def _writer():
+            while not self.stop_event.is_set():
+                try:
+                    data = self.tx_queue.get(timeout=0.2)
+                except queue.Empty:
+                    continue
+                try:
+                    # jediný bod, kde se opravdu zapisuje do sériového portu
+                    self.port.write(data)
+                    print(f"Writer to device done.")
+                except Exception as e:
+                    ts = time.strftime("%H:%M:%S")
+                    print(f"[{ts}] ⚠️ Writer error: {e}")
+        self.writer_thread = threading.Thread(target=_writer, daemon=True)
+        self.writer_thread.start()
+
+    def enqueue_raw(self, data: bytes):
+        """Vloží syrová data (UBX/RTCM/SPARTN) do odesílací fronty."""
+        if self.running:
+            self.tx_queue.put(data)
+
+    def send_esf_ticks(self, time_tag: int, l_ticks: int, l_dir: int, r_ticks: int, r_dir: int):
+        """
+        Přijme odometrické informace (tick počítadla a směry 0=+,1=-),
+        sestaví UBX-ESF-MEAS (wheel ticks) a vloží do odesílací fronty.
+        """
+        # směry přeložíme do znaménka čítačů
+        lt = -l_ticks if l_dir == 1 else l_ticks
+        rt = -r_ticks if r_dir == 1 else r_ticks
+        from ubx import build_esf_meas_ticks
+        msg = build_esf_meas_ticks(lt, rt, time_tag=time_tag)
+        self.enqueue_raw(msg)
+
     # ---------- Životní cyklus ----------
+
 
     def start(self):
         if self.running:
@@ -181,17 +167,15 @@ class GNSSDevice:
         self.port.write(valset)
         if not self._wait_for_ack(0x06, 0x8A):
             print("⚠️ Konfigurace data nebyla potvrzena")
+            return False
 
-        # # 3) CFG-RATE: 10 Hz (legacy, bývá spolehlivější – řeší „Speed“ NAK)
-        # rate = build_msg(0x06, 0x08, self._build_valset_payload_speed())
-        # self.port.write(rate)
-        # if not self._wait_for_ack(0x06, 0x08):
-        #     print("⚠️ Nastavení rychlosti nebyla potvrzena")
-
-        # 4) Spusť reader thread
+        # 4) Spusť reader and writer thread
         self.stop_event.clear()
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
+
+        self._start_writer()  #writer
+
         self.running = True
         return True
 
@@ -201,10 +185,20 @@ class GNSSDevice:
         self.stop_event.set()
         if self.reader_thread:
             self.reader_thread.join(2.0)
+        self.stop_event.set()
+        if self.writer_thread:
+            self.writer_thread.join(2.0)
+        # ukonči klienty
         try:
             self.port.close()
         except Exception:
             pass
+        # vyprázdni frontu
+        try:
+            while True:
+                self.tx_queue.get_nowait()
+        except queue.Empty:
+            pass            
         self.running = False
         self.device_type = None
         with self.lock:

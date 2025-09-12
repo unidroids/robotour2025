@@ -65,43 +65,35 @@ def parse_nav_pvt(payload: bytes):
     }
 
 
-# ---------------------- ESF-MEAS ----------------------
+def build_esf_meas_ticks(time_tag: int,
+                         left_ticks: int, left_dir: int,
+                         right_ticks: int, right_dir: int):
+    """
+    UBX-ESF-MEAS zpráva se dvěma měřeními – wheel ticks left/right.
+    - time_tag: U4 (např. iTOW nebo systémový ms)
+    - left_ticks, right_ticks: unsigned 32-bit (budou oříznuty na 23 bitů)
+    - left_dir, right_dir: 0 = forward, 1 = backward
+    """
 
-def build_esf_meas_speed(speed_mps: float, time_tag: int = 0):
-    """
-    UBX-ESF-MEAS s jedním měřením – vehicle speed
-    speed_mps ... rychlost v m/s
-    """
-    speed_mm = int(speed_mps * 1000)  # mm/s
     payload = b""
-    payload += time_tag.to_bytes(4, "little")  # timeTag
-    payload += (0).to_bytes(1, "little")       # flags
-    payload += (0).to_bytes(1, "little")       # id
-    payload += (1).to_bytes(2, "little")       # dataCount
-    payload += speed_mm.to_bytes(4, "little", signed=True)  # data
-    payload += (0x20).to_bytes(2, "little")    # dataType = vehicle speed
+
+    # --- header části payloadu ---
+    payload += (time_tag & 0xFFFFFFFF).to_bytes(4, "little")   # U4 timeTag
+    payload += (0).to_bytes(2, "little")                      # X2 flags (vše 0)
+    payload += (0).to_bytes(2, "little")                      # U2 id (0 = host SW)
+
+    # pomocná funkce na zabalení jednoho měření
+    def pack_ticks(ticks: int, direction: int, dtype: int) -> bytes:
+        # dataField = spodních 23 bitů + dir bit v 23. pozici
+        data_field = (ticks & 0x7FFFFF) | ((direction & 0x1) << 23)
+        # celé pole (32 bitů): dataField (24 b) + dataType (6 b)
+        word = (data_field & 0xFFFFFF) | ((dtype & 0x3F) << 24)
+        return word.to_bytes(4, "little")
+
+    # left wheel → dataType = 8
+    payload += pack_ticks(left_ticks, left_dir, 8)
+    # right wheel → dataType = 9
+    payload += pack_ticks(right_ticks, right_dir, 9)
+
+    # vrátí kompletní UBX zprávu
     return build_msg(0x10, 0x02, payload)
-
-def build_esf_meas_ticks(left_ticks: int, right_ticks: int, time_tag: int = 0):
-    """
-    UBX-ESF-MEAS se dvěma měřeními – wheel ticks left/right
-    Tick counts = kumulativní čítač od začátku (signed 32b)
-    """
-    payload = b""
-    payload += time_tag.to_bytes(4, "little")  # timeTag
-    payload += (0).to_bytes(1, "little")       # flags
-    payload += (0).to_bytes(1, "little")       # id
-    payload += (2).to_bytes(2, "little")       # dataCount
-
-    # left wheel
-    payload += left_ticks.to_bytes(4, "little", signed=True)
-    payload += (0x00).to_bytes(2, "little")    # dataType = wheel tick sensor 0
-
-    # right wheel
-    payload += right_ticks.to_bytes(4, "little", signed=True)
-    payload += (0x01).to_bytes(2, "little")    # dataType = wheel tick sensor 1
-
-    return build_msg(0x10, 0x02, payload)
-
-
-    
