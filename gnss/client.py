@@ -91,6 +91,23 @@ def handle_client(conn, addr, shutdown_flag):
                         conn.sendall(b"BYE\n")
                         return
 
+                    elif cmd == "GET":
+                        fix = ctx.gnss_device.get_fix()
+                        if not fix:
+                            conn.sendall(b"ERR No fix\n")
+                            continue
+                        try:
+                            # fix je dict s klíči time, lat, lon, alt, speed, heading, numSV, fixType, hAcc, vAcc
+                            reply = (
+                                f"{fix['lat']:.6f} {fix['lon']:.6f} {fix['alt']:.2f} "
+                                f"{fix['heading']:.1f} {fix['speed']:.2f} "
+                                f"{fix['hAcc']:.2f} {fix['vAcc']:.2f} "
+                                f"{fix['numSV']} {fix['fixType']} {fix['time']}\n"
+                            )
+                            conn.sendall(reply.encode())
+                        except Exception as e:
+                            conn.sendall(f"ERR Fix parse failed {e}\n".encode())
+                            
                     else:
                         conn.sendall(b"ERR Unknown cmd\n")
 

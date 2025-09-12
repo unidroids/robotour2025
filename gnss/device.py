@@ -103,7 +103,7 @@ class GNSSDevice:
 
         return p
 
-    def _wait_for_ack(self, expect_cls, expect_id, timeout=1.0):
+    def _wait_for_ack(self, expect_cls, expect_id, timeout=2.0):
         """
         Čeká na ACK-ACK/ACK-NAK k dané zprávě (expect_cls/expect_id).
         UBX-ACK-* payload = [clsID(1), msgID(1)]
@@ -177,27 +177,30 @@ class GNSSDevice:
         if self.running:
             return True
 
-        # 1) Vyber port podle MON-VER
-        for dev in ["/dev/gnss1", "/dev/gnss2"]:
-            try:
-                #ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
-                ser = serial.Serial(dev, baudrate=921600, timeout=1)
-                ser.write(build_msg(0x0A, 0x04))  # MON-VER
-                data = ser.read(300)
-                if b"F9R" in data:
-                    self.device_type = "F9R"
-                    self.port = ser
-                    break
-                elif b"D9S" in data:
-                    self.device_type = "D9S"
-                    self.port = ser
-                    break
-                ser.close()
-            except Exception:
-                continue
+        # # 1) Vyber port podle MON-VER
+        # for dev in ["/dev/gnss1", "/dev/gnss2"]:
+        #     try:
+        #         #ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
+        #         ser = serial.Serial(dev, baudrate=921600, timeout=2)
+        #         ser.write(build_msg(0x0A, 0x04))  # MON-VER
+        #         data = ser.read(300)
+        #         if b"F9R" in data:
+        #             self.device_type = "F9R"
+        #             self.port = ser
+        #             break
+        #         elif b"D9S" in data:
+        #             self.device_type = "D9S"
+        #             self.port = ser
+        #             break
+        #         ser.close()
+        #     except Exception:
+        #         continue
 
-        if not self.port:
-            return False
+        # if not self.port:
+        #     return False
+
+        
+        self.port = serial.Serial("/dev/gnss1", baudrate=921600, timeout=0)
 
         # 2) VALSET: USB protokoly + MSGOUT (RAM)
         valset = build_msg(0x06, 0x8A, self._build_valset_payload_data())
@@ -250,16 +253,19 @@ class GNSSDevice:
         buf = b""
         while not self.stop_event.is_set():
             try:
-                data = self.port.read(1024)
-                if not data:
+                n = self.port.in_waiting
+                if not n:
+                    time.sleep(0.001)  # nic nepřišlo → malý oddech pro CPU
                     continue
+
+                data = self.port.read(n)  # přečti všechny dostupné bajty
                 buf_before = len(buf)
                 buf += data
 
                 while True:
                     msg_class, msg_id, payload, new_buf = parse_stream(buf)
                     if msg_class is None:
-                        # CRC fail rozpoznáme porovnáním délky (parse_stream posouvá o 2 na CRC fail)
+                        # CRC fail poznáme, pokud parse_stream posunul buffer (o 2B) ale nenašel zprávu
                         if len(new_buf) < len(buf):
                             self.bad_counter += 1
                             ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -267,38 +273,33 @@ class GNSSDevice:
                         buf = new_buf
                         break
 
-                    # posun
+                    # posun bufferu
                     buf = new_buf
 
                     # log
                     self.msg_counter += 1
                     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                    
-                    
 
-                    # NAV-PVT
+                    # NAV-PVT (01/07)
                     if msg_class == 0x01 and msg_id == 0x07:
                         fix = parse_nav_pvt(payload)
                         if fix:
                             with self.lock:
                                 self.last_fix = fix
                                 self.last_state = f"sat={fix['numSV']} fixType={fix['fixType']}"
+                            print(f"[{ts}] iTOW={fix['time']}ms UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)}")
 
-                                print(f"[{ts}] iTOW={fix['time']}ms UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)} ")
-
-                    # ESF-STATUS
+                    # ESF-STATUS (10/10)
                     if msg_class == 0x10 and msg_id == 0x10:
                         st = parse_esf_status(payload)
                         if st:
                             with self.lock:
                                 self.last_esf_status = st
                             print(esf_simple_status(st))
-                                
-                    
 
             except Exception as e:
                 self.ignored_counter += 1
-                ts = time.strftime("%H:%M:%S")
+                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                 print(f"[{ts}] ⚠️ Reader error: {e}, ignored={self.ignored_counter}")
                 time.sleep(0.3)
 
