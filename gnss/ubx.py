@@ -97,3 +97,37 @@ def build_esf_meas_ticks(time_tag: int,
 
     # vrátí kompletní UBX zprávu
     return build_msg(0x10, 0x02, payload)
+
+def parse_esf_status(payload: bytes):
+    if len(payload) < 8:
+        return None
+    version = payload[0]
+    fusion_mode = payload[1]
+    iTOW = int.from_bytes(payload[4:8], "little")
+
+    sensors = []
+    offs = 8
+    while offs + 4 <= len(payload):
+        sensStatus1 = payload[offs]
+        sensStatus2 = payload[offs+1]
+        freq        = payload[offs+2]
+        faults      = payload[offs+3]
+        sensor_type = sensStatus1 & 0x3F
+        ready       = bool(sensStatus1 & 0x80)
+        used        = bool(sensStatus1 & 0x40)
+        sensors.append({
+            "sensorType": sensor_type,
+            "used": used,
+            "ready": ready,
+            "qual": sensStatus2,
+            "freq": freq,
+            "faults": faults,
+        })
+        offs += 4
+
+    return {
+        "version": version,
+        "fusionMode": fusion_mode,
+        "iTOW": iTOW,
+        "sensors": sensors,
+    }

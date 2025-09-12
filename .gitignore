@@ -31,3 +31,6 @@ server/robot_lidar_tcp
 # point perfect
 gnss/point_perfect/*.txt
 gnss/point_perfect/*.ubx
+
+# env data
+**/.env

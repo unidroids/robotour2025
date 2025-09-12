@@ -46,6 +46,7 @@ def handle_client(conn, addr, shutdown_flag):
                         conn.sendall((json.dumps(fix) + "\n").encode())
 
                     elif cmd.startswith("ODO "):
+                        print(f"PERFECT")
                         # Formát: ODO %08X %08X %01X %08X %01X
                         try:
                             _, t_hex, l_hex, ld_hex, r_hex, rd_hex = cmd.split()
@@ -74,13 +75,17 @@ def handle_client(conn, addr, shutdown_flag):
                             payload_str = cmd.split(" ", 1)[1].strip()
                             if payload_str.startswith("b64:"):
                                 raw = base64.b64decode(payload_str[4:], validate=True)
+                                print(f"Prijata base64 data: {len(raw)}")
                             else:
                                 # odstraníme případné mezery
                                 payload_str = payload_str.replace(" ", "")
                                 raw = binascii.unhexlify(payload_str)
+                                print(f"Prijata ascii data: {len(raw)}")
+                            
                             gnss_device.enqueue_raw(raw)
                             conn.sendall(b"OK\n")
                         except Exception as e:
+                            print(f"ERR PERFECT {e}\n".encode())
                             conn.sendall(f"ERR PERFECT {e}\n".encode())
                     elif cmd == "EXIT":
                         conn.sendall(b"BYE\n")
