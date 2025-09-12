@@ -38,3 +38,4 @@ gnss/point_perfect/*.ubx
 # chace
 **/cache/
 osm/prototype/cache/
+cache/
