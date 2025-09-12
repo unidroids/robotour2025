@@ -4,10 +4,20 @@ import struct
 import threading
 import time
 import queue
+from datetime import datetime
 from ubx import build_msg, parse_stream
 from ubx import parse_nav_pvt, parse_esf_status
 from ubx import build_esf_meas_ticks
-from esf_dicts import fusion_modes, sensor_types
+from esf_dicts import (
+    fusion_modes,
+    sensor_types,
+    calib_status,
+    time_status,
+    wt_init_status,
+    mnt_alg_status,
+    ins_init_status,
+    imu_init_status,
+)
 
 # CFG-MSGOUT klíče (USB) – UBX-CFG-VALSET
 CFG_USBOUT_UBX = 0x10780001          # CFG-USBOUTPROT-UBX (U1)
@@ -24,6 +34,26 @@ CFG_RATE_NAV_PRIO = 0x20210004  # U1, Hz (priority navigation rate)
 
 CFG_NAVSPG_DYNMODEL = 0x20110021  # key ID podle u-blox interface description
 
+def esf_simple_status(st: dict) -> str:
+    """Vrátí stručný textový výpis pro log z UBX-ESF-STATUS."""
+
+    fm = fusion_modes.get(st.get("fusionMode"), st.get("fusionMode"))
+
+    init = st.get("init", {})
+    init_str = (
+        f"WT={wt_init_status.get(init.get('wtInitStatus'), init.get('wtInitStatus'))} "
+        f"MNT={mnt_alg_status.get(init.get('mntAlgStatus'), init.get('mntAlgStatus'))} "
+        f"INS={ins_init_status.get(init.get('insInitStatus'), init.get('insInitStatus'))} "
+        f"IMU={imu_init_status.get(init.get('imuInitStatus'), init.get('imuInitStatus'))}"
+    )
+
+    sensors = []
+    for s in st.get("sensors", []):
+        s_type = sensor_types.get(s["sensorType"], s["sensorType"])
+        flag = "USED" if s["used"] else ("READY" if s["ready"] else "OFF")
+        sensors.append(f"{s_type}:{flag}")
+
+    return f"🛰️ ESF fusion={fm} Init[{init_str}] Sensors={', '.join(sensors)}"
 
 class GNSSDevice:
     def __init__(self):
@@ -66,7 +96,7 @@ class GNSSDevice:
 
         # --- Výstupní zprávy (počet na navigační epochu) ---
         p += (CFG_MSGOUT_NAV_PVT_USB).to_bytes(4, "little"); p += (1).to_bytes(1, "little")
-        p += (CFG_MSGOUT_ESF_STATUS_USB).to_bytes(4, "little");p += (1).to_bytes(1, "little")        
+        p += (CFG_MSGOUT_ESF_STATUS_USB).to_bytes(4, "little");p += (10).to_bytes(1, "little")        
         # p += (CFG_MSGOUT_NAV_SAT_USB).to_bytes(4, "little"); p += (10).to_bytes(1, "little")
 
         p += (CFG_NAVSPG_DYNMODEL).to_bytes(4, "little"); p += (11).to_bytes(1, "little")   # 11 = mower
@@ -151,7 +181,7 @@ class GNSSDevice:
         for dev in ["/dev/gnss1", "/dev/gnss2"]:
             try:
                 #ser = serial.Serial(dev, baudrate=38400, timeout=0.2)
-                ser = serial.Serial(dev, baudrate=115200, timeout=0.2)
+                ser = serial.Serial(dev, baudrate=921600, timeout=1)
                 ser.write(build_msg(0x0A, 0x04))  # MON-VER
                 data = ser.read(300)
                 if b"F9R" in data:
@@ -232,7 +262,7 @@ class GNSSDevice:
                         # CRC fail rozpoznáme porovnáním délky (parse_stream posouvá o 2 na CRC fail)
                         if len(new_buf) < len(buf):
                             self.bad_counter += 1
-                            ts = time.strftime("%H:%M:%S")
+                            ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                             print(f"[{ts}] ⚠️ CRC fail, bad={self.bad_counter}")
                         buf = new_buf
                         break
@@ -242,9 +272,9 @@ class GNSSDevice:
 
                     # log
                     self.msg_counter += 1
-                    ts = time.strftime("%H:%M:%S")
+                    ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                     
-                    print(f"[{ts}] UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)}")
+                    
 
                     # NAV-PVT
                     if msg_class == 0x01 and msg_id == 0x07:
@@ -254,14 +284,16 @@ class GNSSDevice:
                                 self.last_fix = fix
                                 self.last_state = f"sat={fix['numSV']} fixType={fix['fixType']}"
 
+                                print(f"[{ts}] iTOW={fix['time']}ms UBX #{self.msg_counter} {msg_class:02X}/{msg_id:02X} len={len(payload)} ")
+
                     # ESF-STATUS
                     if msg_class == 0x10 and msg_id == 0x10:
                         st = parse_esf_status(payload)
                         if st:
                             with self.lock:
                                 self.last_esf_status = st
-                                # stručný status string
-                                #self.last_state = f"ESF fusion={st['fusionMode']} sensors={len(st['sensors'])}"
+                            print(esf_simple_status(st))
+                                
                     
 
             except Exception as e:
@@ -273,6 +305,9 @@ class GNSSDevice:
     def get_state(self):
         if not self.running:
             return {"status": "IDLE"}
+
+        self.enqueue_raw(build_msg(0x10, 0x10))
+
         with self.lock:
             state = {
                 "status": "RUNNING",
@@ -287,17 +322,38 @@ class GNSSDevice:
                 esf = self.last_esf_status
                 esf_info = {
                     "fusionMode": fusion_modes.get(esf["fusionMode"], esf["fusionMode"]),
-                    "sensors": []
+                    "numSens": esf["numSens"],
+                    "init": {
+                        "wtInitStatus": wt_init_status.get(
+                            esf["init"]["wtInitStatus"], esf["init"]["wtInitStatus"]
+                        ),
+                        "mntAlgStatus": mnt_alg_status.get(
+                            esf["init"]["mntAlgStatus"], esf["init"]["mntAlgStatus"]
+                        ),
+                        "insInitStatus": ins_init_status.get(
+                            esf["init"]["insInitStatus"], esf["init"]["insInitStatus"]
+                        ),
+                        "imuInitStatus": imu_init_status.get(
+                            esf["init"]["imuInitStatus"], esf["init"]["imuInitStatus"]
+                        ),
+                    },
+                    "sensors": [],
                 }
+
                 for s in esf["sensors"]:
                     esf_info["sensors"].append({
                         "type": sensor_types.get(s["sensorType"], s["sensorType"]),
                         "used": s["used"],
                         "ready": s["ready"],
-                        "qual": s["qual"],
+                        "calibStatus": calib_status.get(s["calibStatus"], s["calibStatus"]),
+                        "timeStatus": time_status.get(s["timeStatus"], s["timeStatus"]),
                         "freq": s["freq"],
                         "faults": s["faults"],
                     })
+
+                if hasattr(self, "last_esf_status_ts"):
+                    esf_info["timestamp"] = self.last_esf_status_ts
+
                 state["esf_status"] = esf_info
 
             return state

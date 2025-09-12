@@ -99,35 +99,68 @@ def build_esf_meas_ticks(time_tag: int,
     return build_msg(0x10, 0x02, payload)
 
 def parse_esf_status(payload: bytes):
-    if len(payload) < 8:
+    if len(payload) < 16:
         return None
-    version = payload[0]
-    fusion_mode = payload[1]
-    iTOW = int.from_bytes(payload[4:8], "little")
+
+    iTOW = int.from_bytes(payload[0:4], "little")
+    version = payload[4]
+    initStatus1 = payload[5]
+    initStatus2 = payload[6]
+    fusionMode = payload[12]
+    numSens = payload[15]
+
+    # rozbití initStatus1
+    wtInitStatus  =  initStatus1        & 0x03        # bity 0..1
+    mntAlgStatus  = (initStatus1 >> 2) & 0x07        # bity 2..4
+    insInitStatus = (initStatus1 >> 5) & 0x03        # bity 5..6
+
+    # rozbití initStatus2
+    imuInitStatus = initStatus2 & 0x03              # bity 0..1
 
     sensors = []
-    offs = 8
-    while offs + 4 <= len(payload):
+    offs = 16
+    for _ in range(numSens):
+        if offs + 4 > len(payload):
+            break
         sensStatus1 = payload[offs]
         sensStatus2 = payload[offs+1]
         freq        = payload[offs+2]
         faults      = payload[offs+3]
+
         sensor_type = sensStatus1 & 0x3F
-        ready       = bool(sensStatus1 & 0x80)
         used        = bool(sensStatus1 & 0x40)
+        ready       = bool(sensStatus1 & 0x80)
+
+        calibStatus = sensStatus2 & 0x03
+        timeStatus  = (sensStatus2 >> 2) & 0x03
+
         sensors.append({
             "sensorType": sensor_type,
             "used": used,
             "ready": ready,
-            "qual": sensStatus2,
+            "calibStatus": calibStatus,
+            "timeStatus": timeStatus,
             "freq": freq,
-            "faults": faults,
+            "faults_raw": faults,
+            "faults": {
+                "badMeas":     bool(faults & 0x01),
+                "badTTag":     bool(faults & 0x02),
+                "missingMeas": bool(faults & 0x04),
+                "noisyMeas":   bool(faults & 0x08),
+            }
         })
         offs += 4
 
     return {
-        "version": version,
-        "fusionMode": fusion_mode,
         "iTOW": iTOW,
+        "version": version,
+        "fusionMode": fusionMode,
+        "numSens": numSens,
+        "init": {
+            "wtInitStatus": wtInitStatus,
+            "mntAlgStatus": mntAlgStatus,
+            "insInitStatus": insInitStatus,
+            "imuInitStatus": imuInitStatus,
+        },
         "sensors": sensors,
     }
