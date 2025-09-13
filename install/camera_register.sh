@@ -5,9 +5,9 @@ LOG_DIR="/data/logs/camera"
 LOG_FILE="$LOG_DIR/cameras.log"
 
 echo "📁 Vytvářím logovací složku..."
-mkdir -p "$LOG_DIR"
-touch "$LOG_FILE"
-chmod 664 "$LOG_FILE"
+sudo mkdir -p "$LOG_DIR"
+sudo touch "$LOG_FILE"
+sudo chmod 664 "$LOG_FILE"
 
 echo "🛠️ Vytvářím systemd službu: robot-cameras.service"
 
@@ -18,7 +18,7 @@ After=network.target
 
 [Service]
 User=user
-WorkingDirectory=/opt/projects/robotour/server
+WorkingDirectory=/opt/projects/robotour/camera
 
 # vlastní spuštění (un-buffer mód kvůli okamžitému logování)
 Environment=PYTHONUNBUFFERED=1
@@ -27,7 +27,7 @@ Environment=PYTHONUNBUFFERED=1
 ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9001/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 
-ExecStart=/usr/bin/python3 cameras.py
+ExecStart=/usr/bin/python3 main.py
 
 # logujeme přes systemd přesměrování
 StandardOutput=append:/data/logs/camera/cameras.log

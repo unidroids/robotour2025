@@ -5,6 +5,8 @@ import socket
 import struct
 from pyzbar import pyzbar
 
+import time
+
 PORT = 5010
 LAPTOP_IP = "192.168.55.100"
 
@@ -12,15 +14,14 @@ def gst_pipeline(sensor_id=0, w=1000, h=800, fps=10):
     base = (
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
         f"video/x-raw(memory:NVMM), width={w}, height={h}, framerate={fps}/1 ! "
-        "nvvidconv ! video/x-raw,format=BGRx ! "
-        "videocrop left=100 right=100 top=0 bottom=0 ! "
-        #"videoscale ! video/x-raw,width=770,height=462 ! "
-        "videoconvert ! videoflip method=clockwise ! "
-        "video/x-raw,format=BGR ! appsink drop=true"
+        "nvvidconv flip-method=3 ! video/x-raw,format=BGRx ! "
+        "videoconvert ! "
+        "video/x-raw,format=BGR ! appsink drop=true max-buffers=1 sync=false"
     )
     return base
 
-cap = cv2.VideoCapture(gst_pipeline(0), cv2.CAP_GSTREAMER)
+t0 = time.time()
+cap = cv2.VideoCapture(gst_pipeline(1), cv2.CAP_GSTREAMER)
 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 client.connect((LAPTOP_IP, PORT))
 
@@ -50,10 +51,16 @@ map1, map2 = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), Knew, (w, h), 
 
 qr_cnt=0
 
+print("header", time.time() - t0)
+
 while True:
+    t0 = time.time()
     ret, frame = cap.read()
     if not ret:
         continue
+
+    print("read", time.time() - t0)
+    t0 = time.time()
 
     frame = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -69,10 +76,24 @@ while True:
         corners2 = cv2.cornerSubPix(gray, corners, (11,11), (-1,-1), CRITERIA)
         cv2.drawChessboardCorners(show, CHESSBOARD_SIZE, corners2, ret_corners)
 
+    print("corners", time.time() - t0)
+    t0 = time.time()
+
     # Pošli obrázek (jpg)
-    _, buf = cv2.imencode('.jpg', show, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    scale = 1
+    h, w = show.shape[:2]
+    resized = cv2.resize(show, (int(w * scale), int(h * scale)),
+                        interpolation=cv2.INTER_AREA)    
+    _, buf = cv2.imencode('.jpg', resized, [int(cv2.IMWRITE_JPEG_QUALITY), 70])
     data = buf.tobytes()
+
+    print("resize", time.time() - t0)
+    t0 = time.time()
+
     client.sendall(struct.pack(">I", len(data)) + data)
+
+    print("send", time.time() - t0)
+    t0 = time.time()
 
     # Čekej na odpověď (1 byte)
     resp = client.recv(1)
@@ -86,6 +107,11 @@ while True:
     elif key == 'q':
         print("Konec.")
         break
+
+    print("response", time.time() - t0)
+    t0 = time.time()
+
+
 
 cap.release()
 client.close()

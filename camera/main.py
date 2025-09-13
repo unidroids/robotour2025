@@ -1,0 +1,53 @@
+# main.py – robot-cameras server (Robotour 2025)
+import socket
+import threading
+import signal
+from client import handle_client
+from worker import shutdown_flag, stop_all
+
+HOST = "127.0.0.1"
+PORT = 9001
+
+client_threads = []
+client_threads_lock = threading.Lock()
+
+def sigint_handler(signum, frame):
+    print("\n🧯 SIGINT zachycen, ukončuji server...")
+    stop_all()
+    shutdown_flag.set()
+
+def start_server():
+    signal.signal(signal.SIGINT, sigint_handler)
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((HOST, PORT))
+    server.listen()
+    print(f"📷 robot-cameras server naslouchá na {HOST}:{PORT}")
+
+    try:
+        while not shutdown_flag.is_set():
+            server.settimeout(1.0)
+            try:
+                conn, addr = server.accept()
+            except socket.timeout:
+                continue
+            print(f"📡 Klient připojen: {addr}")
+            t = threading.Thread(target=handle_client, args=(conn, addr), daemon=True)
+            t.start()
+            with client_threads_lock:
+                client_threads.append(t)
+    except Exception as e:
+        print(f"❌ Chyba serveru: {e}")
+    finally:
+        try:
+            server.close()
+        except:
+            pass
+        with client_threads_lock:
+            for t in client_threads:
+                t.join(timeout=1.0)
+        print("🛑 Server ukončen.")
+
+if __name__ == "__main__":
+    start_server()
