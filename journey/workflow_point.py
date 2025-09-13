@@ -8,6 +8,10 @@ from typing import Optional, Tuple
 from services import send_command
 from util import log_event, parse_lidar_distance
 
+import json
+import re
+
+
 # Používané služby:
 PORT_LIDAR   = 9002
 PORT_DRIVE   = 9003
@@ -52,32 +56,43 @@ def _read_point_ini() -> Tuple[float, float, float]:
 
 def _hacc_mm_from_gnss_data(s: str) -> Optional[float]:
     """
-    Tolerantní parser hAcc:
-    - podporuje formáty: "hAcc=0.42 m", "hAcc: 420 mm", '"hAcc":0.42' (m),
-      i např. "hAcc 0.42 m".
-    Vrací hodnotu v milimetrech.
+    DATA z GNSS vrací JSON s hAcc v milimetrech.
+    - Pokusí se načíst JSON (i když je kolem něj nějaký text).
+    - Najde klíč 'hAcc' i v zanořených strukturách.
+    - Vrací hAcc v mm (float), nebo None, když není dostupné.
     """
     if not s:
         return None
 
-    # JSON-like: "hAcc": 0.42  => m (předpoklad)
-    m = re.search(r'"?hAcc"?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|m)?', s, flags=re.I)
-    if not m:
-        # fallback: hAcc 0.42 m
-        m = re.search(r'hAcc\s+([0-9]+(?:\.[0-9]+)?)\s*(mm|cm|m)?', s, flags=re.I)
+    try:
+        # Najdi první '{' a poslední '}', aby to zvládlo i řetězce "INFO {...}"
+        start = s.find("{")
+        end = s.rfind("}")
+        payload = s[start:end + 1] if (start != -1 and end != -1 and end > start) else s
+        obj = json.loads(payload)
 
-    if not m:
-        return None
+        def find_hacc(o) -> Optional[float]:
+            if isinstance(o, dict):
+                if "hAcc" in o and isinstance(o["hAcc"], (int, float)):
+                    return float(o["hAcc"])  # už v mm
+                for v in o.values():
+                    r = find_hacc(v)
+                    if r is not None:
+                        return r
+            elif isinstance(o, list):
+                for v in o:
+                    r = find_hacc(v)
+                    if r is not None:
+                        return r
+            return None
 
-    val = float(m.group(1))
-    unit = (m.group(2) or "m").lower()
+        val = find_hacc(obj)
+        return float(val) if val is not None else None
 
-    if unit == "mm":
-        return val
-    if unit == "cm":
-        return val * 10.0
-    # default/meters:
-    return val * 1000.0
+    except Exception:
+        # Fallback: když JSON selže, vezmi první číslo za "hAcc"
+        m = re.search(r'"?hAcc"?\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)', s)
+        return float(m.group(1)) if m else None
 
 
 def _distance_cm() -> Optional[float]:
@@ -126,6 +141,31 @@ def _unsafe(hacc_mm: Optional[float], dist_cm: Optional[float]) -> bool:
     return False
 
 
+def _await_gnss_ok(threshold_mm: float = 500.0, timeout_s: float = 120.0, poll_s: float = 0.5) -> bool:
+    """Čeká, než GNSS hAcc klesne pod threshold_mm. Vrací True/False dle úspěchu/timeoutu."""
+    t0 = time.time()
+    while not _stop_requested.is_set() and (time.time() - t0) < timeout_s:
+        hacc = _gnss_hacc_mm()
+        if hacc is not None:
+            _safe_send_to_client(f"GNSS hAcc: {hacc:.0f} mm\n")
+            if hacc < threshold_mm:
+                return True
+        time.sleep(poll_s)
+    return False
+
+
+def _await_lidar_ok(timeout_s: float = 30.0, poll_s: float = 0.2) -> bool:
+    """Čeká, než LIDAR začne vracet validní DISTANCE. Vrací True/False dle úspěchu/timeoutu."""
+    t0 = time.time()
+    while not _stop_requested.is_set() and (time.time() - t0) < timeout_s:
+        d = _distance_cm()
+        if d is not None:
+            _safe_send_to_client(f"LIDAR DISTANCE: {d:.0f} cm\n")
+            return True
+        time.sleep(poll_s)
+    return False
+
+
 def _point_workflow():
     try:
         log_event("POINT workflow: START")
@@ -133,20 +173,40 @@ def _point_workflow():
 
         lat, lon, radius = _read_point_ini()
 
-        # 1) START všech služeb (GNSS, PP, DRIVE, PILOT, LIDAR)
+        # --- Skupina 1: GNSS + PointPerfect + DRIVE ---
         _send_and_report(PORT_GNSS,   "PING")
         _send_and_report(PORT_PPOINT, "PING")
         _send_and_report(PORT_DRIVE,  "PING")
-        _send_and_report(PORT_PILOT,  "PING")
-        _send_and_report(PORT_LIDAR,  "PING")
 
         _send_and_report(PORT_GNSS,   "START")
         _send_and_report(PORT_PPOINT, "START")
         _send_and_report(PORT_DRIVE,  "START")
+
+        # Po startu Skupiny 1 vyčkej, až GNSS bude přesný (hAcc < 500 mm)
+        _safe_send_to_client("WAIT GNSS(hAcc<500mm)...\n")
+        if not _await_gnss_ok(threshold_mm=500.0, timeout_s=120.0, poll_s=0.5):
+            _safe_send_to_client("ERROR: GNSS not ready (hAcc >= 500mm) within timeout.\n")
+            return  # předčasné ukončení workflow (cleanup proběhne ve finally)
+
+        # --- Skupina 2: PILOT + LIDAR (až když je GNSS OK) ---
+        _send_and_report(PORT_PILOT,  "PING")
+        _send_and_report(PORT_LIDAR,  "PING")
+
         _send_and_report(PORT_PILOT,  "START")
         _send_and_report(PORT_LIDAR,  "START")
 
-        # 2) Hlavní smyčka
+        # Rychlá validace obou: GNSS (pořád OK) + LIDAR (začne vracet DISTANCE)
+        _safe_send_to_client("VALIDATE GNSS & LIDAR...\n")
+        gnss_still_ok = _await_gnss_ok(threshold_mm=500.0, timeout_s=5.0, poll_s=0.5)
+        lidar_ok      = _await_lidar_ok(timeout_s=30.0, poll_s=0.2)
+        if not (gnss_still_ok and lidar_ok):
+            if not gnss_still_ok:
+                _safe_send_to_client("ERROR: GNSS lost accuracy during validation.\n")
+            if not lidar_ok:
+                _safe_send_to_client("ERROR: LIDAR not providing DISTANCE.\n")
+            return  # předčasné ukončení (cleanup ve finally)
+
+        # -------------- Hlavní smyčka ----------------
         last_gnss_ts   = 0.0
         last_status_ts = 0.0
 
@@ -160,7 +220,7 @@ def _point_workflow():
         while not _stop_requested.is_set():
             now = time.time()
 
-            # a) LIDAR – čti průběžně (rychleji)
+            # a) LIDAR – čti průběžně
             dist_cm = _distance_cm()
 
             # b) GNSS – cca 1 s
@@ -187,7 +247,7 @@ def _point_workflow():
                 _safe_send_to_client("STATE: UNSAFE -> CLEAR + PWM 0 0 (5s)\n")
                 _emergency_brake_5s()
                 brake_phase = True
-                waypoint_sent = False  # budeme posílat waypoint znovu až po zklidnění
+                waypoint_sent = False
                 continue
 
             # e) Když je bezpečno a ještě jsme neposlali waypoint (nebo po brzde)
@@ -198,7 +258,7 @@ def _point_workflow():
                 brake_phase = False
                 _safe_send_to_client(f"SENT: {cmd}\n")
 
-            time.sleep(0.10)  # rozumná perioda smyčky
+            time.sleep(0.10)
 
         _safe_send_to_client("WORKFLOW POINT END\n")
 
