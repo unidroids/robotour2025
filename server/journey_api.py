@@ -13,6 +13,8 @@ JOURNEY_CMD_MAP = {
     "status"    : "PING",
     "demo"      : "DEMO",
     "manual"    : "MANUAL",
+    "point"     : "POINT",
+    "auto"      : "AUTO",
     "stop"      : "STOP",
 }
 
