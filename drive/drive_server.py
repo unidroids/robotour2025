@@ -1,4 +1,4 @@
-from drive_serial import open_serial, close_serial, send_serial
+from drive_serial import open_serial, close_serial, send_serial, start_serial_reader, stop_serial_reader
 from drive_client import handle_client
 import socket
 import threading
@@ -15,21 +15,29 @@ shutdown_flag = False
 def start_server():
     global shutdown_flag
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((HOST, PORT))
     server.listen()
     print(f"🚦 robot-hoverboard server naslouchá na {HOST}:{PORT}")
 
     def signal_handler(sig, frame):
         global shutdown_flag
-        print("\n🧯 Ctrl+C – ukončuji server a všechna spojení...")
+        print("\n🧯 Ctrl+C – ukončuji server a všechna spojení.")
         shutdown_flag = True
-        server.close()
+        try:
+            server.close()
+        except Exception:
+            pass
         with client_threads_lock:
             for t in client_threads:
                 try:
                     t.join(timeout=2)
                 except:
                     pass
+        try:
+            stop_serial_reader()
+        except Exception:
+            pass
         close_serial()
         print("🛑 Server ukončen.")
         sys.exit(0)
@@ -47,6 +55,10 @@ def start_server():
             with client_threads_lock:
                 client_threads.append(t)
     finally:
+        try:
+            stop_serial_reader()
+        except Exception:
+            pass
         close_serial()
         print("🛑 Server ukončen.")
 
