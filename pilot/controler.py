@@ -72,7 +72,7 @@ class AutopilotController:
         with self.ctx.lock:
             self.ctx.status = STATUS_IDLE
         # STOP robota
-        send_command(DRIVE_PORT, "STOP")
+        send_command(DRIVE_PORT, "PWM 0 0")
 
     def _loop(self):
         while not self.stop_event.is_set():
@@ -81,7 +81,7 @@ class AutopilotController:
                 # GNSS nedostupné -> STOP
                 with self.ctx.lock:
                     self.ctx.status = STATUS_ERROR
-                send_command(DRIVE_PORT, "STOP")
+                send_command(DRIVE_PORT, "PWM 0 0")
                 time.sleep(0.5)
                 continue
 

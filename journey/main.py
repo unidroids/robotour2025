@@ -9,6 +9,9 @@ from util import log_event
 from workflow_demo import start_demo_workflow, stop_demo_workflow, demo_running
 # Nový MANUAL workflow:
 from workflow_manual import start_manual_workflow, stop_manual_workflow, manual_running
+# Nové workflow POINT a AUTO:
+from workflow_point import start_point_workflow, stop_point_workflow, point_running
+from workflow_auto  import start_auto_workflow,  stop_auto_workflow,  auto_running
 
 HOST = "127.0.0.1"
 PORT = 9004
@@ -31,7 +34,19 @@ def status_text() -> str:
         return "RUNNING MANUAL"
     if demo_running.is_set():
         return "RUNNING DEMO"
+    if point_running.is_set():
+        return "RUNNING POINT"
+    if auto_running.is_set():
+        return "RUNNING AUTO"
     return "IDLE"
+
+
+def _any_workflow_running() -> Optional[str]:
+    if manual_running.is_set(): return "MANUAL"
+    if demo_running.is_set():   return "DEMO"
+    if point_running.is_set():  return "POINT"
+    if auto_running.is_set():   return "AUTO"
+    return None
 
 
 def handle_client(conn: socket.socket, addr):
@@ -58,8 +73,6 @@ def handle_client(conn: socket.socket, addr):
                         safe_send(conn, status_text() + "\n")
 
                     elif cmd == "LOG":
-                        # Posledních ~60 záznamů (aby odpověď nebyla příliš dlouhá)
-                        # util.log_event ukládá průběžně do paměti
                         try:
                             last = log_event.get_log()[-60:]
                             safe_send(conn, "\n".join(last) + "\nEND\n")
@@ -67,9 +80,11 @@ def handle_client(conn: socket.socket, addr):
                             safe_send(conn, f"ERROR {e}\n")
 
                     elif cmd == "STOP":
-                        # Zastaví libovolné běžící workflow (MANUAL i DEMO)
+                        # Zastaví libovolné běžící workflow (MANUAL/DEMO/POINT/AUTO)
                         stop_manual_workflow()
                         stop_demo_workflow()
+                        stop_point_workflow()
+                        stop_auto_workflow()
                         safe_send(conn, "OK STOP SENT\n")
 
                     elif cmd == "EXIT":
@@ -78,27 +93,39 @@ def handle_client(conn: socket.socket, addr):
 
                     # ---- WORKFLOW – MANUAL ----------------------------------
                     elif cmd == "MANUAL":
-                        # V jednu chvíli dovolíme běžet pouze jednomu workflow
-                        if manual_running.is_set():
-                            safe_send(conn, "ERR: workflow MANUAL je právě aktivní\n")
-                        elif demo_running.is_set():
-                            safe_send(conn, "ERR: workflow DEMO je právě aktivní\n")
+                        running = _any_workflow_running()
+                        if running:
+                            safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
                         else:
-                            # spustit v samostatném vlákně, výsledky posílat tomuto klientovi
                             start_manual_workflow(client_conn=conn)
                             safe_send(conn, "OK MANUAL WORKFLOW STARTED\n")
 
-                    # ---- PŮVODNÍ DEMO (pokud chcete zachovat start přes JOURNEY) ----
+                    # ---- WORKFLOW – DEMO ------------------------------------
                     elif cmd == "DEMO":
-                        # Zde jen brána: zakážeme paralelní běh s MANUAL
-                        if manual_running.is_set():
-                            safe_send(conn, "ERR: workflow MANUAL je právě aktivní\n")
-                        elif demo_running.is_set():
-                            safe_send(conn, "ERR: workflow DEMO je právě aktivní\n")
+                        running = _any_workflow_running()
+                        if running:
+                            safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
                         else:
-                            # Původní DEMO startuje ve vaší implementaci (workflow.py)
                             start_demo_workflow(client_conn=conn)
                             safe_send(conn, "OK DEMO WORKFLOW STARTED\n")
+
+                    # ---- WORKFLOW – POINT -----------------------------------
+                    elif cmd == "POINT":
+                        running = _any_workflow_running()
+                        if running:
+                            safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
+                        else:
+                            start_point_workflow(client_conn=conn)
+                            safe_send(conn, "OK POINT WORKFLOW STARTED\n")
+
+                    # ---- WORKFLOW – AUTO ------------------------------------
+                    elif cmd == "AUTO":
+                        running = _any_workflow_running()
+                        if running:
+                            safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
+                        else:
+                            start_auto_workflow(client_conn=conn)
+                            safe_send(conn, "OK AUTO WORKFLOW STARTED\n")
 
                     else:
                         safe_send(conn, "ERR Unknown cmd\n")
@@ -141,6 +168,8 @@ def sigint_handler(signum, frame):
     # korektně ukončí běžící workflow a pošle STOP do služeb
     stop_manual_workflow()
     stop_demo_workflow()
+    stop_point_workflow()
+    stop_auto_workflow()
 
 
 if __name__ == "__main__":

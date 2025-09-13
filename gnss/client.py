@@ -46,7 +46,6 @@ def handle_client(conn, addr, shutdown_flag):
                         conn.sendall((json.dumps(fix) + "\n").encode())
 
                     elif cmd.startswith("ODO "):
-                        print(f"PERFECT")
                         # Formát: ODO %08X %08X %01X %08X %01X
                         try:
                             _, t_hex, l_hex, ld_hex, r_hex, rd_hex = cmd.split()
