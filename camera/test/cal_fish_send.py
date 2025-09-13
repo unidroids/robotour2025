@@ -32,20 +32,22 @@ objp[0,:,:2] = np.mgrid[0:CHESSBOARD_SIZE[0], 0:CHESSBOARD_SIZE[1]].T.reshape(-1
 
 objpoints, imgpoints = [], []
 
-# Předpokládej známé rozlišení (např. z kamery)
+# # Předpokládej známé rozlišení (např. z kamery)
 w, h = 800, 800
 
 d = np.load("camera_fisheye_calib.npz")
 K, D = d["K"], d["D"]
 Knew = K.copy()
-Knew[1,2] += 0  # posun cx doprava (výřez posuneš doprava)
-Knew[0,2] += 0  # posun cx doprava (výřez posuneš doprava)
-# nebo Knew[1,2] += ...  pro posun ve svislém směru
-
-# Nebo můžeš „zoomovat“ (zvětšit ohnisko)
-Knew[0,0] *= 0.8  # fx, horizontální zoom
-Knew[1,1] *= 0.8  # fy, vertikální zoom
 map1, map2 = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), Knew, (w, h), cv2.CV_16SC2)
+
+# Knew[1,2] += 0  # posun cx doprava (výřez posuneš doprava)
+# Knew[0,2] += 0  # posun cx doprava (výřez posuneš doprava)
+# # nebo Knew[1,2] += ...  pro posun ve svislém směru
+
+# # Nebo můžeš „zoomovat“ (zvětšit ohnisko)
+# Knew[0,0] *= 0.8  # fx, horizontální zoom
+# Knew[1,1] *= 0.8  # fy, vertikální zoom
+# map1, map2 = cv2.fisheye.initUndistortRectifyMap(K, D, np.eye(3), Knew, (w, h), cv2.CV_16SC2)
 
 #print(K)
 

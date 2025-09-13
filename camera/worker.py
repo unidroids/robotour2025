@@ -6,6 +6,8 @@ import threading
 from datetime import datetime
 from collections import deque
 from pyzbar import pyzbar
+import numpy as np
+from pathlib import Path
 
 # -------------------------------
 # Sdílený stav
@@ -34,9 +36,6 @@ right_buf = deque(maxlen=BUFFER_SIZE)
 frame_seq = 0
 frame_cond = threading.Condition()
 
-import numpy as np
-from pathlib import Path
-
 # -------------------------------
 # Fisheye korekce
 # -------------------------------
@@ -55,7 +54,6 @@ def load_fisheye_maps(w: int, h: int):
         KL, DL = dL["K"], dL["D"]
         KR, DR = dR["K"], dR["D"]
 
-        # volitelně: můžeme jemně změnit Knew (zoom, posun) – zatím kopie
         KLnew, KRnew = KL.copy(), KR.copy()
 
         mapL1, mapL2 = cv2.fisheye.initUndistortRectifyMap(
@@ -77,18 +75,19 @@ def gst_pipeline(sensor_id: int, f: int, w: int = 1000, h: int = 800, fps: int =
         f"nvarguscamerasrc sensor-id={sensor_id} ! "
         f"video/x-raw(memory:NVMM), width={w}, height={h}, framerate={fps}/1 ! "
         f"nvvidconv flip-method={f} ! video/x-raw, format=BGRx ! "
-        "videocrop left=100 right=100 top=0 bottom=0 ! "
         "videoconvert ! video/x-raw, format=BGR ! appsink drop=true max-buffers=1 sync=false"
     )
 
-
+# -------------------------------
+# Kamera vlákno
+# -------------------------------
 def camera_loop_thread():
     global loop_running, frame_seq
     print("📷 Smyčka kamer spuštěna")
 
-    width, height = 1000-200, 800  # po cropu left+right (videocrop left=100 right=100)
-    capL = cv2.VideoCapture(gst_pipeline(0, 1), cv2.CAP_GSTREAMER)
-    capR = cv2.VideoCapture(gst_pipeline(1, 3), cv2.CAP_GSTREAMER)
+    width, height = 1000 - 200, 800
+    capL = cv2.VideoCapture(gst_pipeline(0, 3), cv2.CAP_GSTREAMER)
+    capR = cv2.VideoCapture(gst_pipeline(1, 1), cv2.CAP_GSTREAMER)
 
     if not capL.isOpened() or not capR.isOpened():
         print("❌ Nelze otevřít kamery")
@@ -156,13 +155,14 @@ def log_loop_thread():
 # -------------------------------
 # QR worker
 # -------------------------------
+# worker.py
 def qr_worker():
-    global qr_running, qr_result
+    global qr_running, qr_result, qr_lock
     print("🧾 QR worker spuštěn")
     deadline = time.time() + 120
     last_seq = 0
-    qr_result = None
-    qr_ready.clear()   # začínáme vždy s čistým eventem
+
+    qr_ready.clear()
 
     while time.time() < deadline and not shutdown_flag.is_set() and loop_running:
         with frame_cond:
@@ -177,13 +177,15 @@ def qr_worker():
 
         for code in codes:
             data = code.data.decode("utf-8")
+            print(f"🧾 QR DATA: {data}")
             if data.startswith("geo:"):
-                qr_result = data
+                with qr_lock:             # <<< chrání zápis
+                    qr_result = data
                 qr_ready.set()
                 print(f"🧾 QR FOUND: {qr_result}")
                 break
 
-        if qr_result:
+        if qr_ready.is_set():
             break
 
     with qr_lock:
@@ -221,13 +223,14 @@ def stop_log_loop():
     log_running = False
 
 def start_qr_worker() -> bool:
-    global qr_running, qr_thread
+    global qr_running, qr_thread, qr_result
     if not loop_running:
         return False
     with qr_lock:
         if qr_running:
             return True
         qr_running = True
+        qr_result = None   # reset při startu
         qr_thread = threading.Thread(target=qr_worker, daemon=True)
         qr_thread.start()
         return True
