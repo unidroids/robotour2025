@@ -91,7 +91,7 @@ def handle_client(conn, addr, shutdown_flag):
                         return
 
                     elif cmd == "GET":
-                        fix = ctx.gnss_device.get_fix()
+                        fix = gnss_device.get_fix()
                         if not fix:
                             conn.sendall(b"ERR No fix\n")
                             continue
