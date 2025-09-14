@@ -33,6 +33,17 @@ NEAR_RADIUS_SLOWDOWN = 0.8   # m: “plížení” blízko cíle (nižší base 
 # EMA filtr pro vzdálenost (jen pro debug vyhlazení)
 DIST_EMA_ALPHA = 0.3
 
+# ── Korekce headingu (kalibrace krabičky) ─────────────────────────
+# Pokud je GNSS/IMU krabička mechanicky pootočená, uprav si offset a invert:
+HEADING_OFFSET_DEG = 0.0     # např. +90, -90, +180 ...
+HEADING_INVERT = True       # True => použije se -heading před přičtením offsetu
+
+# ── Úhlová brána (face-to-target) ─────────────────────────────────
+# Když je úhlová chyba větší, *vždy* točíme na místě (ignorujeme rychlost z GNSS).
+ANGLE_TO_ROTATE_ONLY = 35    # ° – velká odchylka: točit na místě
+FACE_ONLY_DISTANCE   = 10   # m – blízko cíle přitvrdíme
+FACE_ANGLE_NEAR      = 12    # ° – pokud (dist <= FACE_ONLY_DISTANCE) a |err| >= tohle, točíme
+
 # ── Utility ───────────────────────────────────────────────────────
 def clamp(v: int, lo: int, hi: int) -> int:
     return lo if v < lo else hi if v > hi else v
@@ -163,7 +174,7 @@ class AutopilotController:
                 dist_eq, brg_eq, dx, dy = equirectangular_distance_bearing(lat, lon, wlat, wlon)
                 brg_hav = bearing(lat, lon, wlat, wlon)
 
-                # 2) EMA
+                # 2) EMA (jen diagnosticky)
                 dist_raw = dist_eq
                 if self.dist_ema is None:
                     self.dist_ema = dist_raw
@@ -182,10 +193,17 @@ class AutopilotController:
                 self._last_heading = heading_deg
                 self._last_time = now
 
-                # 5) řízení (zohlední zpomalení blízko cíle)
-                left, right, rotate_only = self._compute_pwm(dist_raw, err_eq, speed_mps, radius)
+                # 5) ÚHLOVÁ BRÁNA – pokud je odchylka velká, toč na místě
+                use_speed = speed_mps
+                if abs(err_eq) >= ANGLE_TO_ROTATE_ONLY:
+                    use_speed = 0.0
+                elif dist_raw <= FACE_ONLY_DISTANCE and abs(err_eq) >= FACE_ANGLE_NEAR:
+                    use_speed = 0.0
 
-                # 6) log (včetně radius)
+                # 6) řízení (zohlední zpomalení blízko cíle)
+                left, right, rotate_only = self._compute_pwm(dist_raw, err_eq, use_speed, radius)
+
+                # 7) log (včetně radius)
                 print(
                     "INTENT"
                     f" dist_eq={dist_eq:.2f}m dist_hav={dist_hav:.2f}m dist_ema={self.dist_ema:.2f}m"
@@ -196,7 +214,7 @@ class AutopilotController:
                     f" rotate_only={rotate_only} PWM=({left},{right})"
                 )
 
-                # 7) dosažení cíle
+                # 8) dosažení cíle
                 if dist_raw <= radius:
                     with self.ctx.lock:
                         self.ctx.status = STATUS_REACHED
@@ -205,7 +223,7 @@ class AutopilotController:
                     self.stop_event.set()
                     return
 
-                # 8) aktace (pokud nejsme v DRY_RUN)
+                # 9) aktace (pokud nejsme v DRY_RUN)
                 with self.ctx.lock:
                     self.ctx.status = STATUS_RUNNING
                 if not DRY_RUN:
@@ -234,10 +252,15 @@ class AutopilotController:
             try:
                 j = json.loads(resp)
                 hacc_m = normalize_hacc_meters(float(j.get("hAcc", 999.0)))
+
+                raw_heading = float(j.get("heading", 0.0))
+                heading = (-raw_heading if HEADING_INVERT else raw_heading) + HEADING_OFFSET_DEG
+                heading = heading % 360.0
+
                 return (
                     float(j["lat"]),
                     float(j["lon"]),
-                    float(j.get("heading", 0.0)),
+                    heading,
                     float(j.get("speed", 0.0)),
                     hacc_m,
                 )
@@ -248,7 +271,11 @@ class AutopilotController:
         try:
             parts = resp.split()
             lat = float(parts[0]); lon = float(parts[1])
-            heading = float(parts[3]) if len(parts) > 3 else 0.0
+
+            raw_heading = float(parts[3]) if len(parts) > 3 else 0.0
+            heading = (-raw_heading if HEADING_INVERT else raw_heading) + HEADING_OFFSET_DEG
+            heading = heading % 360.0
+
             speed = float(parts[4]) if len(parts) > 4 else 0.0
             hacc_raw = float(parts[5]) if len(parts) > 5 else 999.0
             hacc_m = normalize_hacc_meters(hacc_raw)

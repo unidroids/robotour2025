@@ -35,6 +35,7 @@ def handle_client(conn, addr, ctx):
 
                     elif cmd == "STOP":
                         stop_controller(ctx)
+                        ctx.waypoint = None
                         conn.sendall(b"OK\n")
 
                     elif cmd == "STATUS":
