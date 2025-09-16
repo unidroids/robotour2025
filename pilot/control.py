@@ -21,14 +21,14 @@ DRY_RUN = False  # <— jede se “naostro” (PWM se posílá do DRIVE)
 
 # ── Tuning / limity ───────────────────────────────────────────────
 MAX_PWM = 40                 # absolutní strop pro testování
-BASE_PWM_FORWARD = 12        # základní dopředná síla (opatrná)
-TURN_MAX = 20                # max korekce řízení (±)
+BASE_PWM_FORWARD = 30        # základní dopředná síla (opatrná)
+TURN_MAX = 30                # max korekce řízení (±)
 TARGET_SPEED = 0.30          # m/s (cílová rychlost)
 SPEED_BRAKE = 0.35           # m/s (tvrdá brzda: 0,0)
 ROTATE_SPEED_THRESH = 0.03   # m/s (pod tím točíme na místě)
-ANGLE_DEAD_BAND = 10         # ° (mrtvé pásmo při točení na místě)
-PWM_RAMP_STEP = 6            # max změna PWM / cyklus
-NEAR_RADIUS_SLOWDOWN = 0.8   # m: “plížení” blízko cíle (nižší base pwm)
+ANGLE_DEAD_BAND = 1          # ° (mrtvé pásmo při točení na místě)
+PWM_RAMP_STEP =  3            # max změna PWM / cyklus
+NEAR_RADIUS_SLOWDOWN = 1     # m: “plížení” blízko cíle (nižší base pwm)
 
 # EMA filtr pro vzdálenost (jen pro debug vyhlazení)
 DIST_EMA_ALPHA = 0.3
@@ -36,13 +36,13 @@ DIST_EMA_ALPHA = 0.3
 # ── Korekce headingu (kalibrace krabičky) ─────────────────────────
 # Pokud je GNSS/IMU krabička mechanicky pootočená, uprav si offset a invert:
 HEADING_OFFSET_DEG = 0.0     # např. +90, -90, +180 ...
-HEADING_INVERT = True       # True => použije se -heading před přičtením offsetu
+HEADING_INVERT = False       # True => použije se -heading před přičtením offsetu
 
 # ── Úhlová brána (face-to-target) ─────────────────────────────────
 # Když je úhlová chyba větší, *vždy* točíme na místě (ignorujeme rychlost z GNSS).
-ANGLE_TO_ROTATE_ONLY = 35    # ° – velká odchylka: točit na místě
-FACE_ONLY_DISTANCE   = 10   # m – blízko cíle přitvrdíme
-FACE_ANGLE_NEAR      = 12    # ° – pokud (dist <= FACE_ONLY_DISTANCE) a |err| >= tohle, točíme
+ANGLE_TO_ROTATE_ONLY = 40    # ° – velká odchylka: točit na místě
+FACE_ONLY_DISTANCE   = 2     # m – blízko cíle přitvrdíme
+FACE_ANGLE_NEAR      = 30    # ° – pokud (dist <= FACE_ONLY_DISTANCE) a |err| >= tohle, točíme
 
 # ── Utility ───────────────────────────────────────────────────────
 def clamp(v: int, lo: int, hi: int) -> int:
@@ -131,6 +131,7 @@ class AutopilotController:
         self.dist_ema: Optional[float] = None
         self._last_heading = None
         self._last_time = None
+        self._last_ts = None
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -158,10 +159,24 @@ class AutopilotController:
                 with self.ctx.lock:
                     self.ctx.status = STATUS_ERROR
                 send_command(DRIVE_PORT, "PWM 0 0")
+                time.sleep(0.05)  # rychlejší retry
+                continue
+
+            lat, lon, heading_deg, speed_mps, hacc_m, ts_ms = pose  # doplň timestamp
+            if ts_ms == self._last_ts:
+                time.sleep(0.05)
+                continue
+            self._last_ts = ts_ms
+
+            pose = self._get_gnss_pose()
+            if not pose:
+                with self.ctx.lock:
+                    self.ctx.status = STATUS_ERROR
+                send_command(DRIVE_PORT, "PWM 0 0")
                 time.sleep(0.5)
                 continue
 
-            lat, lon, heading_deg, speed_mps, hacc_m = pose
+            #lat, lon, heading_deg, speed_mps, hacc_m = pose
             with self.ctx.lock:
                 self.ctx.last_pose = (lat, lon)
                 wp = self.ctx.waypoint
@@ -195,10 +210,18 @@ class AutopilotController:
 
                 # 5) ÚHLOVÁ BRÁNA – pokud je odchylka velká, toč na místě
                 use_speed = speed_mps
+
+                # A) daleko od cíle: pokud úhlová chyba moc velká → toč na místě
                 if abs(err_eq) >= ANGLE_TO_ROTATE_ONLY:
                     use_speed = 0.0
-                elif dist_raw <= FACE_ONLY_DISTANCE and abs(err_eq) >= FACE_ANGLE_NEAR:
-                    use_speed = 0.0
+
+                # B) blízko cíle: zpřísníme toleranci pro "musím se dotočit"
+                elif dist_raw <= FACE_ONLY_DISTANCE:
+                    if abs(err_eq) >= FACE_ANGLE_NEAR:
+                        use_speed = 0.0
+                    else:
+                        # už namířeno → povolíme rozjezd i když rychlost≈0
+                        use_speed = max(speed_mps, 0.01)
 
                 # 6) řízení (zohlední zpomalení blízko cíle)
                 left, right, rotate_only = self._compute_pwm(dist_raw, err_eq, use_speed, radius)
@@ -234,52 +257,25 @@ class AutopilotController:
                 send_command(DRIVE_PORT, "PWM 0 0")
                 print("INTENT bez waypointu – stát")
 
-            time.sleep(0.5)
 
-    def _get_gnss_pose(self) -> Optional[Tuple[float, float, float, float, float]]:
+    def _get_gnss_pose(self) -> Optional[Tuple[float, float, float, float, float, float]]:
         """
-        Vrátí (lat, lon, heading, speed, hAcc[m]) z GNSS služby.
-        Podporuje:
-          - JSON: {"lat","lon","heading","speed","hAcc",...} (hAcc očekávám v mm -> převod!)
-          - text: lat lon alt heading speed hAcc vAcc numSV fixType time
+        Vrátí (lat, lon, heading, speed, hAcc[m], ts_ms) z GNSS služby.
         """
         resp = send_command(GNSS_PORT, "GET")
         if not resp:
             return None
 
-        # JSON
-        if resp.startswith("{") or '"lat"' in resp:
-            try:
-                j = json.loads(resp)
-                hacc_m = normalize_hacc_meters(float(j.get("hAcc", 999.0)))
-
-                raw_heading = float(j.get("heading", 0.0))
-                heading = (-raw_heading if HEADING_INVERT else raw_heading) + HEADING_OFFSET_DEG
-                heading = heading % 360.0
-
-                return (
-                    float(j["lat"]),
-                    float(j["lon"]),
-                    heading,
-                    float(j.get("speed", 0.0)),
-                    hacc_m,
-                )
-            except Exception as e:
-                print(f"⚠️ GNSS JSON parse fail: {e} | {resp}")
-
         # Text
         try:
             parts = resp.split()
             lat = float(parts[0]); lon = float(parts[1])
-
-            raw_heading = float(parts[3]) if len(parts) > 3 else 0.0
-            heading = (-raw_heading if HEADING_INVERT else raw_heading) + HEADING_OFFSET_DEG
-            heading = heading % 360.0
-
+            heading = float(parts[3]) if len(parts) > 3 else 0.0
             speed = float(parts[4]) if len(parts) > 4 else 0.0
             hacc_raw = float(parts[5]) if len(parts) > 5 else 999.0
             hacc_m = normalize_hacc_meters(hacc_raw)
-            return (lat, lon, heading, speed, hacc_m)
+            ts_ms = float(parts[-1]) if len(parts) >= 10 else time.time() * 1000
+            return (lat, lon, heading, speed, hacc_m, ts_ms)
         except Exception as e:
             print(f"⚠️ GNSS text parse fail: {e} | {resp}")
             return None
@@ -328,7 +324,7 @@ class AutopilotController:
                     target_right = int(target_right * factor)
 
         # rampování
-        left  = ramp(self.prev_left,  int(target_left),  PWM_RAMP_STEP)
+        left  = ramp(self.prev_left,  int(target_left),  PWM_RAMP_STEP*1.5) 
         right = ramp(self.prev_right, int(target_right), PWM_RAMP_STEP)
         self.prev_left, self.prev_right = left, right
 
