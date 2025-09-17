@@ -21,28 +21,22 @@ DRY_RUN = False  # <— jede se “naostro” (PWM se posílá do DRIVE)
 
 # ── Tuning / limity ───────────────────────────────────────────────
 MAX_PWM = 40                 # absolutní strop pro testování
-BASE_PWM_FORWARD = 30        # základní dopředná síla (opatrná)
-TURN_MAX = 30                # max korekce řízení (±)
+BASE_PWM_FORWARD = 12        # základní dopředná síla (opatrná)
+TURN_MAX = 20                # max korekce řízení (±)
 TARGET_SPEED = 0.30          # m/s (cílová rychlost)
 SPEED_BRAKE = 0.35           # m/s (tvrdá brzda: 0,0)
 ROTATE_SPEED_THRESH = 0.03   # m/s (pod tím točíme na místě)
-ANGLE_DEAD_BAND = 1          # ° (mrtvé pásmo při točení na místě)
-PWM_RAMP_STEP =  3            # max změna PWM / cyklus
-NEAR_RADIUS_SLOWDOWN = 1     # m: “plížení” blízko cíle (nižší base pwm)
+ANGLE_DEAD_BAND = 10         # ° (mrtvé pásmo při točení na místě)
+PWM_RAMP_STEP = 6            # max změna PWM / cyklus
+NEAR_RADIUS_SLOWDOWN = 0.8   # m: “plížení” blízko cíle (nižší base pwm)
 
 # EMA filtr pro vzdálenost (jen pro debug vyhlazení)
 DIST_EMA_ALPHA = 0.3
 
-# ── Korekce headingu (kalibrace krabičky) ─────────────────────────
-# Pokud je GNSS/IMU krabička mechanicky pootočená, uprav si offset a invert:
-HEADING_OFFSET_DEG = 0.0     # např. +90, -90, +180 ...
-HEADING_INVERT = False       # True => použije se -heading před přičtením offsetu
-
-# ── Úhlová brána (face-to-target) ─────────────────────────────────
-# Když je úhlová chyba větší, *vždy* točíme na místě (ignorujeme rychlost z GNSS).
-ANGLE_TO_ROTATE_ONLY = 40    # ° – velká odchylka: točit na místě
-FACE_ONLY_DISTANCE   = 2     # m – blízko cíle přitvrdíme
-FACE_ANGLE_NEAR      = 30    # ° – pokud (dist <= FACE_ONLY_DISTANCE) a |err| >= tohle, točíme
+# ── Limity otáčení ────────────────────────────────────────────────
+ROTATE_TARGET_DEGPS = 90.0   # cílová úhlová rychlost (~4 s na 360°)
+ROTATE_MAX_PWM     = TURN_MAX
+ROTATE_MIN_PWM     = 6       # aby se to vůbec rozjelo
 
 # ── Utility ───────────────────────────────────────────────────────
 def clamp(v: int, lo: int, hi: int) -> int:
@@ -66,12 +60,6 @@ def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return R_EARTH * c
 
 def equirectangular_distance_bearing(lat1: float, lon1: float, lat2: float, lon2: float):
-    """
-    Stabilní na malé vzdálenosti:
-      dx ~ R * dLon * cos(lat0)
-      dy ~ R * dLat
-      bearing = atan2(dx, dy) od severu (CW), v °.
-    """
     lat0 = math.radians((lat1 + lat2) / 2.0)
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
@@ -90,7 +78,6 @@ def bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return (brng + 360) % 360
 
 def angle_diff(target_deg: float, current_deg: float) -> float:
-    """(target - current) v rozsahu -180..180."""
     return (target_deg - current_deg + 180) % 360 - 180
 
 def send_command(port: int, cmd: str, timeout: float = 1.0) -> Optional[str]:
@@ -104,24 +91,10 @@ def send_command(port: int, cmd: str, timeout: float = 1.0) -> Optional[str]:
         return None
 
 def normalize_hacc_meters(hacc_value: float) -> float:
-    """
-    GNSS posílá hAcc často v milimetrech (např. 42 => 0.042 m).
-    Pokud číslo vypadá jako mm (>=10), převedeme mm->m.
-    """
     return hacc_value / 1000.0 if hacc_value >= 10.0 else hacc_value
 
 # ── Kontroler ─────────────────────────────────────────────────────
 class AutopilotController:
-    """
-    Ostrá verze:
-      - GNSS -> lat/lon/heading/speed/hAcc
-      - equirectangular + haversine pro cross-check
-      - řízení: BASE_PWM_FORWARD + korekce ±TURN_MAX; bez couvání při jízdě
-      - točení na místě při malé rychlosti; bezpečný STOP = PWM 0 0
-      - guvernér rychlosti (TARGET_SPEED), brzda nad SPEED_BRAKE
-      - rampování PWM
-      - log: záměr (“INTENT”), dist, bearing, radius
-    """
     def __init__(self, ctx: Any):
         self.ctx = ctx
         self.thread: Optional[threading.Thread] = None
@@ -131,7 +104,8 @@ class AutopilotController:
         self.dist_ema: Optional[float] = None
         self._last_heading = None
         self._last_time = None
-        self._last_ts = None
+        self._last_heading_rate = 0.0
+        self._rotate_pwm = ROTATE_MIN_PWM
 
     def start(self):
         if self.thread and self.thread.is_alive():
@@ -146,7 +120,6 @@ class AutopilotController:
         self.stop_event.set()
         if self.thread:
             self.thread.join(timeout=1.0)
-        # Bezpečné zastavení
         send_command(DRIVE_PORT, "PWM 0 0")
         with self.ctx.lock:
             if self.ctx.status not in (STATUS_REACHED, STATUS_ERROR):
@@ -159,74 +132,38 @@ class AutopilotController:
                 with self.ctx.lock:
                     self.ctx.status = STATUS_ERROR
                 send_command(DRIVE_PORT, "PWM 0 0")
-                time.sleep(0.05)  # rychlejší retry
-                continue
-
-            lat, lon, heading_deg, speed_mps, hacc_m, ts_ms = pose  # doplň timestamp
-            if ts_ms == self._last_ts:
                 time.sleep(0.05)
                 continue
-            self._last_ts = ts_ms
 
-            pose = self._get_gnss_pose()
-            if not pose:
-                with self.ctx.lock:
-                    self.ctx.status = STATUS_ERROR
-                send_command(DRIVE_PORT, "PWM 0 0")
-                time.sleep(0.5)
-                continue
-
-            #lat, lon, heading_deg, speed_mps, hacc_m = pose
+            lat, lon, heading_deg, speed_mps, hacc_m = pose
             with self.ctx.lock:
                 self.ctx.last_pose = (lat, lon)
                 wp = self.ctx.waypoint
 
             if wp:
                 wlat, wlon, radius = wp
-
-                # 1) výpočet vzdálenosti/bearingu dvěma způsoby
                 dist_hav = haversine_distance(lat, lon, wlat, wlon)
                 dist_eq, brg_eq, dx, dy = equirectangular_distance_bearing(lat, lon, wlat, wlon)
                 brg_hav = bearing(lat, lon, wlat, wlon)
 
-                # 2) EMA (jen diagnosticky)
                 dist_raw = dist_eq
                 if self.dist_ema is None:
                     self.dist_ema = dist_raw
                 else:
                     self.dist_ema = (1 - DIST_EMA_ALPHA) * self.dist_ema + DIST_EMA_ALPHA * dist_raw
 
-                # 3) úhlová chyba proti GNSS headingu
                 err_eq = angle_diff(brg_eq, heading_deg)
                 err_hav = angle_diff(brg_hav, heading_deg)
 
-                # 4) diagnostika změny headingu (nepoužitá pro řízení, jen info)
                 now = time.time()
                 if self._last_heading is not None and self._last_time is not None:
                     dt = max(now - self._last_time, 1e-3)
-                    _ = angle_diff(heading_deg, self._last_heading) / dt  # °/s
+                    self._last_heading_rate = angle_diff(heading_deg, self._last_heading) / dt
                 self._last_heading = heading_deg
                 self._last_time = now
 
-                # 5) ÚHLOVÁ BRÁNA – pokud je odchylka velká, toč na místě
-                use_speed = speed_mps
+                left, right, rotate_only = self._compute_pwm(dist_raw, err_eq, speed_mps, radius)
 
-                # A) daleko od cíle: pokud úhlová chyba moc velká → toč na místě
-                if abs(err_eq) >= ANGLE_TO_ROTATE_ONLY:
-                    use_speed = 0.0
-
-                # B) blízko cíle: zpřísníme toleranci pro "musím se dotočit"
-                elif dist_raw <= FACE_ONLY_DISTANCE:
-                    if abs(err_eq) >= FACE_ANGLE_NEAR:
-                        use_speed = 0.0
-                    else:
-                        # už namířeno → povolíme rozjezd i když rychlost≈0
-                        use_speed = max(speed_mps, 0.01)
-
-                # 6) řízení (zohlední zpomalení blízko cíle)
-                left, right, rotate_only = self._compute_pwm(dist_raw, err_eq, use_speed, radius)
-
-                # 7) log (včetně radius)
                 print(
                     "INTENT"
                     f" dist_eq={dist_eq:.2f}m dist_hav={dist_hav:.2f}m dist_ema={self.dist_ema:.2f}m"
@@ -237,7 +174,6 @@ class AutopilotController:
                     f" rotate_only={rotate_only} PWM=({left},{right})"
                 )
 
-                # 8) dosažení cíle
                 if dist_raw <= radius:
                     with self.ctx.lock:
                         self.ctx.status = STATUS_REACHED
@@ -246,27 +182,34 @@ class AutopilotController:
                     self.stop_event.set()
                     return
 
-                # 9) aktace (pokud nejsme v DRY_RUN)
                 with self.ctx.lock:
                     self.ctx.status = STATUS_RUNNING
                 if not DRY_RUN:
                     self._actuate(left, right)
 
             else:
-                # bez cíle – stát
                 send_command(DRIVE_PORT, "PWM 0 0")
                 print("INTENT bez waypointu – stát")
 
+            time.sleep(0.05)
 
-    def _get_gnss_pose(self) -> Optional[Tuple[float, float, float, float, float, float]]:
-        """
-        Vrátí (lat, lon, heading, speed, hAcc[m], ts_ms) z GNSS služby.
-        """
+    def _get_gnss_pose(self) -> Optional[Tuple[float, float, float, float, float]]:
         resp = send_command(GNSS_PORT, "GET")
         if not resp:
             return None
-
-        # Text
+        if resp.startswith("{") or '"lat"' in resp:
+            try:
+                j = json.loads(resp)
+                hacc_m = normalize_hacc_meters(float(j.get("hAcc", 999.0)))
+                return (
+                    float(j["lat"]),
+                    float(j["lon"]),
+                    float(j.get("heading", 0.0)),
+                    float(j.get("speed", 0.0)),
+                    hacc_m,
+                )
+            except Exception as e:
+                print(f"⚠️ GNSS JSON parse fail: {e} | {resp}")
         try:
             parts = resp.split()
             lat = float(parts[0]); lon = float(parts[1])
@@ -274,57 +217,45 @@ class AutopilotController:
             speed = float(parts[4]) if len(parts) > 4 else 0.0
             hacc_raw = float(parts[5]) if len(parts) > 5 else 999.0
             hacc_m = normalize_hacc_meters(hacc_raw)
-            ts_ms = float(parts[-1]) if len(parts) >= 10 else time.time() * 1000
-            return (lat, lon, heading, speed, hacc_m, ts_ms)
+            return (lat, lon, heading, speed, hacc_m)
         except Exception as e:
             print(f"⚠️ GNSS text parse fail: {e} | {resp}")
             return None
 
     def _compute_pwm(self, dist: float, angle_err_deg: float, speed: float, radius: float):
-        """
-        Vrátí (left,right,rotate_only) – ostrý záměr pro DRIVE.
-        - točení na místě, pokud rychlost < ROTATE_SPEED_THRESH
-        - dopředná jízda bez couvání, korekce ±TURN_MAX
-        - zpomalení, když jsme blízko cíle (dist < NEAR_RADIUS_SLOWDOWN)
-        - guvernér rychlosti (TARGET_SPEED), brzda při SPEED_BRAKE
-        - rampování
-        """
-        # bezpečnostní brzda
         if speed > SPEED_BRAKE:
             target_left, target_right = 0, 0
             rotate_only = False
         else:
             rotate_only = (speed < ROTATE_SPEED_THRESH)
             if rotate_only:
+                # adaptivní omezení rychlosti otáčení
+                target_pwm = self._rotate_pwm
+                measured_rate = abs(self._last_heading_rate)
+                if measured_rate > 1e-3:
+                    factor = ROTATE_TARGET_DEGPS / measured_rate
+                    target_pwm = int(clamp(int(target_pwm * factor),
+                                           ROTATE_MIN_PWM, ROTATE_MAX_PWM))
+                self._rotate_pwm = target_pwm
+
                 if angle_err_deg > ANGLE_DEAD_BAND:
-                    target_left, target_right =  TURN_MAX, -TURN_MAX
+                    target_left, target_right =  target_pwm, -target_pwm
                 elif angle_err_deg < -ANGLE_DEAD_BAND:
-                    target_left, target_right = -TURN_MAX,  TURN_MAX
+                    target_left, target_right = -target_pwm,  target_pwm
                 else:
                     target_left, target_right = 0, 0
             else:
-                # blízko cíle -> ještě opatrnější base
                 base = BASE_PWM_FORWARD if dist > NEAR_RADIUS_SLOWDOWN else max(8, BASE_PWM_FORWARD - 4)
                 turn = clamp(int(angle_err_deg / 5), -TURN_MAX, TURN_MAX)
-                target_left  = base - turn
-                target_right = base + turn
+                target_left  = max(0, min(base - turn, MAX_PWM))
+                target_right = max(0, min(base + turn, MAX_PWM))
 
-                # žádné couvání v běžné jízdě
-                target_left  = max(target_left, 0)
-                target_right = max(target_right, 0)
-
-                # saturace
-                target_left  = min(target_left, MAX_PWM)
-                target_right = min(target_right, MAX_PWM)
-
-                # guvernér rychlosti – když GNSS rychlost přesahuje target, škáluj dolů
                 if speed > TARGET_SPEED:
-                    factor = TARGET_SPEED / max(speed, 1e-3)  # <= 1.0
+                    factor = TARGET_SPEED / max(speed, 1e-3)
                     target_left  = int(target_left  * factor)
                     target_right = int(target_right * factor)
 
-        # rampování
-        left  = ramp(self.prev_left,  int(target_left),  PWM_RAMP_STEP*1.5) 
+        left  = ramp(self.prev_left,  int(target_left),  PWM_RAMP_STEP)
         right = ramp(self.prev_right, int(target_right), PWM_RAMP_STEP)
         self.prev_left, self.prev_right = left, right
 
@@ -333,7 +264,6 @@ class AutopilotController:
     def _actuate(self, left: int, right: int):
         cmd = f"PWM {left} {right}"
         send_command(DRIVE_PORT, cmd)
-        # stručný log aktuace (INTENT už obsahuje všechny metriky)
         print(f"➡️ DRIVE: {cmd}")
 
 # ── API pro main.py ───────────────────────────────────────────────
