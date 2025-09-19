@@ -25,7 +25,7 @@ def make_initial_config(prio_hz=10, enable_nav_eoe=True):
 
     # --- Rate / PRIO ---
     #meas_ms = 33 if prio_hz >= 30 else 500   # 33ms≈30Hz, 100ms=10Hz
-    meas_ms = 500
+    meas_ms = 250
     items += [
         (K.CFG_RATE_MEAS,     meas_ms, 'U2'),
         (K.CFG_RATE_NAV,      1,       'U2'),
@@ -41,8 +41,8 @@ def make_initial_config(prio_hz=10, enable_nav_eoe=True):
         (K.CFG_MSGOUT_NAV_ATT_USB,      1, 'U1'),
         (K.CFG_MSGOUT_ESF_INS_USB,      1, 'U1'),
     ]
-    if enable_nav_eoe:
-        items.append((K.CFG_MSGOUT_NAV_EOE_USB, 1, 'U1'))
+    #if enable_nav_eoe:
+    #    items.append((K.CFG_MSGOUT_NAV_EOE_USB, 1, 'U1'))
 
     print ("Config items:",items)
     # Pošli pouze do RAM (rychlé ověření), ne do BBR/Flash:

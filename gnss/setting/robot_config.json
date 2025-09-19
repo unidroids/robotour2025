@@ -1,0 +1,73 @@
+{
+    "version": 0,
+    "cfgData": [
+        {
+            "key": "CFG-SFCORE-IMU2CRP_LA_X",
+            "value": -29
+        },
+        {
+            "key": "CFG-SFCORE-IMU2CRP_LA_Y",
+            "value": -1
+        },
+        {
+            "key": "CFG-SFCORE-IMU2CRP_LA_Z",
+            "value": -93
+        },
+        {
+            "key": "CFG-SFODO-IMU2VRP_LA_X",
+            "value": -29
+        },
+        {
+            "key": "CFG-SFODO-IMU2VRP_LA_Y",
+            "value": -1
+        },
+        {
+            "key": "CFG-SFODO-IMU2VRP_LA_Z",
+            "value": -93
+        },
+        {
+            "key": "CFG-SFIMU-IMU2ANT_LA_X",
+            "value": 4
+        },
+        {
+            "key": "CFG-SFIMU-IMU2ANT_LA_Y",
+            "value": -1
+        },
+        {
+            "key": "CFG-SFIMU-IMU2ANT_LA_Z",
+            "value": 3
+        },
+        {
+            "key": "CFG-SFIMU-AUTO_MNTALG_ENA",
+            "value": 0
+        },
+        {
+            "key": "CFG-SFIMU-IMU_MNTALG_YAW",
+            "value": 9000
+        },
+        {
+            "key": "CFG-SFIMU-IMU_MNTALG_PITCH",
+            "value": 0
+        },
+        {
+            "key": "CFG-SFIMU-IMU_MNTALG_ROLL",
+            "value": 0
+        },
+        {
+            "key": "CFG-SFIMU-IMU_MNTALG_TOLERANCE",
+            "value": 0
+        },
+        {
+            "key": "CFG-SFODO-FACTOR",
+            "value": 8866
+        },
+        {
+            "key": "CFG-SFODO-QUANT_ERROR",
+            "value": 8866
+        },
+        {
+            "key": "CFG-SFODO-COUNT_MAX",
+            "value": 8388607
+        }
+    ]
+}

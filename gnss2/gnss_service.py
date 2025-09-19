@@ -3,34 +3,37 @@
 import argparse
 import logging
 import queue
+import statistics
 import struct
 import sys
 import threading
 import time
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 
 import serial
 
 from ubx_proto import SerialBytes, parse_stream, build_poll
 from gnss_config import make_initial_config, apply_config_with_ack
-from itow_extract import extract_itow  # ← soubor itow_extract.py ulož vedle tohoto
+from itow_extract import extract_itow
+from ubx_decode import decode_mon_sys, decode_mon_txbuf  # ← přesunuto sem
 
-# ----- UBX Class/ID (správné hodnoty) -----
+# ----- UBX Class/ID -----
 CLASS_NAV = 0x01
 CLASS_ESF = 0x10
 CLASS_MON = 0x0A
 
 ID_NAV_ATT      = 0x05  # UBX-NAV-ATT
 ID_NAV_VELNED   = 0x12  # UBX-NAV-VELNED
-ID_NAV_HPPOSLLH = 0x14  # UBX-NAV-HPPOSLLH (iTOW na offsetu 4!)
+ID_NAV_HPPOSLLH = 0x14  # UBX-NAV-HPPOSLLH (iTOW @ +4)
 ID_NAV_EOE      = 0x61  # UBX-NAV-EOE
 
 ID_ESF_INS      = 0x15  # UBX-ESF-INS
 ID_ESF_STATUS   = 0x10  # UBX-ESF-STATUS (poll/periodic)
 
-ID_MON_TXBUF    = 0x08  # UBX-MON-TXBUF (poll/periodic)
-ID_MON_SYS      = 0x39  # UBX-MON-SYS   (poll/periodic)
+ID_MON_TXBUF    = 0x08  # UBX-MON-TXBUF
+ID_MON_SYS      = 0x39  # UBX-MON-SYS
 
+# „povinná“ PRIO sada v rámci jednoho iTOW
 NEEDED = {
     (CLASS_NAV, ID_NAV_ATT),
     (CLASS_NAV, ID_NAV_VELNED),
@@ -50,63 +53,33 @@ MSG_NAMES = {
 }
 
 
-def decode_mon_sys(payload: bytes) -> dict:
-    """
-    UBX-MON-SYS (0x0A 0x39), běžná délka 24 B (msgVer=1).
-    Pole: cpu/mem/io usage (%), runtime, počty notice/warn/error, teplota.
-    """
-    if len(payload) < 19:
-        return {"len": len(payload), "raw_hex": payload.hex()}
-    # <BBBBBBBB = msgVer, bootType, cpuLoad, cpuLoadMax, memUsage, memUsageMax, ioUsage, ioUsageMax
-    msgVer, bootType, cpuLoad, cpuLoadMax, memUsage, memUsageMax, ioUsage, ioUsageMax = struct.unpack_from(
-        "<BBBBBBBB", payload, 0
-    )
-    runTime = struct.unpack_from("<I", payload, 8)[0]
-    notice, warn, err = struct.unpack_from("<HHH", payload, 12)
-    temp = struct.unpack_from("<b", payload, 18)[0]
-    return {
-        "msgVer": msgVer,
-        "bootType": bootType,
-        "cpuLoad%": cpuLoad,
-        "cpuLoadMax%": cpuLoadMax,
-        "memUsage%": memUsage,
-        "memUsageMax%": memUsageMax,
-        "ioUsage%": ioUsage,
-        "ioUsageMax%": ioUsageMax,
-        "runTime_s": runTime,
-        "notice": notice,
-        "warn": warn,
-        "err": err,
-        "temp_C": temp,
-    }
-
-
-def decode_mon_txbuf(payload: bytes) -> dict:
-    """
-    UBX-MON-TXBUF (0x0A 0x08), délka 28 B.
-    pending[6] (U2), usage[6] % (U1), peak[6] % (U1), totalUsage (U1), totalPeak (U1), errors (U1).
-    """
-    if len(payload) < 28:
-        return {"len": len(payload), "raw_hex": payload.hex()}
-    pending = list(struct.unpack_from("<6H", payload, 0))
-    usage = list(struct.unpack_from("<6B", payload, 12))
-    peak = list(struct.unpack_from("<6B", payload, 18))
-    tUsage, tPeak, errors = struct.unpack_from("<BBB", payload, 24)
-    return {
-        "pending": pending,
-        "usage%": usage,
-        "peak%": peak,
-        "totalUsage%": tUsage,
-        "totalPeak%": tPeak,
-        "errors": errors,
-    }
+def quantiles_safe(samples, qs):
+    """Jednoduché kvantily bez numpy; vrací dict q->value, prázdné pokud vzorků málo."""
+    if not samples:
+        return {q: None for q in qs}
+    data = sorted(samples)
+    out = {}
+    n = len(data)
+    for q in qs:
+        if n == 1:
+            out[q] = data[0]
+            continue
+        # p-th quantile index (inclusive lower)
+        pos = q * (n - 1)
+        lo = int(pos)
+        hi = min(lo + 1, n - 1)
+        frac = pos - lo
+        out[q] = data[lo] * (1 - frac) + data[hi] * frac
+    return out
 
 
 class GNSSService:
-    def __init__(self, port: str, baud: int, log_path: str, prio_hz: int):
+    def __init__(self, port: str, baud: int, log_path: str, prio_hz: int,
+                 bucket_timeout_ms: int | None = None, span_hist_size: int = 300):
         self.port = port
         self.baud = baud
         self.prio_hz = prio_hz
+        self.bucket_timeout_ms = bucket_timeout_ms  # pokud None, timeout se nepoužije
 
         # serial non-blocking
         self.ser = serial.Serial(port, baudrate=baud, timeout=0, write_timeout=0)
@@ -121,10 +94,15 @@ class GNSSService:
         # stats
         self.counts = Counter()
         self.last_stats = time.time()
+        self.span_hist = deque(maxlen=span_hist_size)  # ms z kompletních epoch (first→last)
 
-        # epoch collector: iTOW -> set(msg_class,id)
-        self.epoch_map: dict[int, set[tuple[int, int]]] = {}
-        self.last_eoe_itow: int | None = None
+        # epoch collector: iTOW -> dict
+        #   { 'present': set[(cls,id)],
+        #     'first_ts': float,  # monotonic čas 1. zprávy v bucketu
+        #     'last_ts':  float,  # monotonic čas poslední zprávy v bucketu
+        #     'complete_logged': bool }
+        self.epoch_map: dict[int, dict] = {}
+        self.first_eoe_seen = False
 
         # logging
         logging.basicConfig(
@@ -138,15 +116,21 @@ class GNSSService:
     def start_threads(self):
         threading.Thread(target=self.reader_loop, name="ubx-reader", daemon=True).start()
         threading.Thread(target=self.writer_loop, name="ubx-writer", daemon=True).start()
-        threading.Thread(target=self.poller_loop, name="poller", daemon=True).start()
+        #threading.Thread(target=self.poller_loop, name="poller", daemon=True).start()
 
     def reader_loop(self):
         byte_iter = SerialBytes(self.ser)
-        for cls, mid, payload, ts in parse_stream(iter(byte_iter)):
-            try:
-                self.recv_q.put((cls, mid, payload, ts), timeout=0.1)
-            except queue.Full:
-                self.log.warning("recv_q FULL – dropping message")
+        try:
+            for cls, mid, payload, ts in parse_stream(iter(byte_iter)):
+                if self.stop_ev.is_set():
+                    break
+                try:
+                    self.recv_q.put((cls, mid, payload, ts), timeout=0.1)
+                except queue.Full:
+                    self.log.warning("recv_q FULL – dropping message")
+        except (serial.SerialException, OSError) as e:
+            if not self.stop_ev.is_set():
+                self.log.warning("reader stopped: %s", e)
 
     def writer_loop(self):
         while not self.stop_ev.is_set():
@@ -165,13 +149,10 @@ class GNSSService:
         while not self.stop_ev.is_set():
             sel = i % 3
             if sel == 0:
-                # MON-TXBUF
                 self.send_q.put(build_poll(CLASS_MON, ID_MON_TXBUF))
             elif sel == 1:
-                # ESF-STATUS
                 self.send_q.put(build_poll(CLASS_ESF, ID_ESF_STATUS))
             else:
-                # MON-SYS
                 self.send_q.put(build_poll(CLASS_MON, ID_MON_SYS))
             i += 1
             # zarovnání na sekundy
@@ -180,8 +161,25 @@ class GNSSService:
 
     # ----- high-level -----
     def apply_config(self):
-        # sestavení a odeslání configu + čekání na ACK
-        frame = make_initial_config(prio_hz=self.prio_hz, enable_nav_eoe=True)
+        # make_initial_config může vracet 1, 2 nebo 3 hodnoty
+        res = make_initial_config(prio_hz=self.prio_hz, enable_nav_eoe=True)
+
+        frame = None
+        cfg_items = None
+        # možnost: res je tuple s 1..3 prvky, nebo už přímo bytes
+        if isinstance(res, tuple):
+            n = len(res)
+            if n >= 1:
+                frame = res[0]
+            if n >= 2:
+                cfg_items = res[1]
+            # pokud je n >= 3, třetí položku ignorujeme (meta/debug)
+        else:
+            frame = res  # res je přímo frame (bytes)
+
+        if cfg_items is not None:
+            self.log.info("Config items: %s", cfg_items)
+
         ok = apply_config_with_ack(self.ser, self.recv_q, frame, timeout=1.5)
         if not ok:
             self.log.error("CFG-VALSET nebyl ACKnut! Zkontroluj klíče/port.")
@@ -197,47 +195,57 @@ class GNSSService:
 
         try:
             while not self.stop_ev.is_set():
+                # příjem
                 try:
                     cls, mid, payload, ts = self.recv_q.get(timeout=0.2)
                 except queue.Empty:
                     pass
                 else:
-                    self.handle_message(cls, mid, payload)
+                    self.handle_message(cls, mid, payload, ts)
 
-                # per-second stats
+                # housekeeping: per-second stats + případné timeouts
                 now = time.time()
                 if now - self.last_stats >= 1.0:
                     self.last_stats = now
+                    # optional timeout flush
+                    if self.bucket_timeout_ms is not None:
+                        self.flush_timeouts(now_monotonic=time.monotonic())
+
+                    # stats line
                     if self.counts:
                         s = ", ".join(
                             f"{k[0]:02X}/{k[1]:02X}:{v}" for k, v in sorted(self.counts.items())
                         )
                     else:
                         s = "-"
-                    self.log.info("Counts: %s", s)
+                    # span stats
+                    qs = quantiles_safe(list(self.span_hist), [0.5, 0.95, 0.99])
+                    span_txt = (
+                        f"spans_ms(n={len(self.span_hist)}): "
+                        f"p50={qs[0.5]:.1f} p95={qs[0.95]:.1f} p99={qs[0.99]:.1f}"
+                        if len(self.span_hist) >= 5 else
+                        f"spans_ms(n={len(self.span_hist)}): collecting…"
+                    )
+                    self.log.info("Counts: %s | %s", s, span_txt)
         except KeyboardInterrupt:
             pass
         finally:
             self.stop_ev.set()
             try:
-                # na některých platformách existuje cancel_read(); když není, prostě zavři
                 if hasattr(self.ser, "cancel_read"):
                     self.ser.cancel_read()
             except Exception:
-                pass            
+                pass
             try:
                 self.ser.close()
             except Exception:
                 pass
-            
-            # nech vlákna doběhnout krátkým joinem, pokud nejsou daemon
-            #for t in self.threads: t.join(timeout=0.5)
 
-    # ----- message handlers -----
-    def handle_message(self, cls: int, mid: int, payload: bytes):
+    # ----- message handlers / aggregator -----
+    def handle_message(self, cls: int, mid: int, payload: bytes, ts_mono: float):
         self.counts[(cls, mid)] += 1
 
-        # decode MON messages for visibility
+        # Decode MON messages for visibility
         if (cls, mid) == (CLASS_MON, ID_MON_TXBUF):
             info = decode_mon_txbuf(payload)
             self.log.info("MON-TXBUF: %s", info)
@@ -247,44 +255,111 @@ class GNSSService:
             self.log.info("MON-SYS: %s", info)
             return
 
-        # collect epoch parts (PRIO set + EOE)
-        if (cls, mid) in (NEEDED | {(CLASS_NAV, ID_NAV_EOE)}):
-            itow = extract_itow((cls, mid), payload)
-            if itow is None:
-                # unexpected – log once in a while
-                if self.counts[(cls, mid)] % 10 == 1:
-                    self.log.warning("No iTOW for %s", MSG_NAMES.get((cls, mid), f"{cls:02X}/{mid:02X}"))
-                return
+        # PRIO + EOE kolektor
+        is_tracked = (cls, mid) in NEEDED or (cls, mid) == (CLASS_NAV, ID_NAV_EOE)
+        if not is_tracked:
+            print("not recognized msg", cls, mid)
+            return
 
-            if (cls, mid) == (CLASS_NAV, ID_NAV_EOE):
-                # flush epoch
-                present = self.epoch_map.pop(itow, set())
-                missing = NEEDED - present
+        itow = extract_itow((cls, mid), payload)
+        if itow is None:
+            # jen zřídka — logni občas
+            if self.counts[(cls, mid)] % 50 == 1:
+                self.log.warning("No iTOW for %s", MSG_NAMES.get((cls, mid), f"{cls:02X}/{mid:02X}"))
+            return
+
+        if (cls, mid) == (CLASS_NAV, ID_NAV_EOE):
+            if not self.first_eoe_seen:
+                self.first_eoe_seen = True
+                # první EOE nevalidujeme, jen watermark
+                return
+            # uzavři vše s iTOW <= EOE (watermark)
+            self.flush_up_to_eoe(itow)
+            return
+
+        # PRIO zpráva: aktualizuj bucket
+        b = self.epoch_map.get(itow)
+        if b is None:
+            b = self.epoch_map[itow] = {
+                "present": set(),
+                "first_ts": ts_mono,
+                "last_ts": ts_mono,
+                "complete_logged": False,
+            }
+        b["present"].add((cls, mid))
+        if ts_mono > b["last_ts"]:
+            b["last_ts"] = ts_mono
+
+        # když se sada uzavře, spočítej span a ulož do hist
+        if not b["complete_logged"] and b["present"] >= NEEDED:
+            span_ms = (b["last_ts"] - b["first_ts"]) * 1000.0
+            self.span_hist.append(span_ms)
+            b["complete_logged"] = True
+            # detailní log pro daný iTOW
+            # self.log.info(
+            #     "Epoch %d COMPLETE: span_ms=%.1f (from %s) ",
+            #     itow, span_ms, ", ".join(sorted(MSG_NAMES[m] for m in b["present"]))
+            # )
+
+    def flush_up_to_eoe(self, eoe_itow: int):
+        """Uzavři všechny buckety s iTOW <= eoe_itow. Pokud nejsou kompletní, zaloguj co chybí."""
+        to_delete = []
+        for itow, b in self.epoch_map.items():
+            if itow <= eoe_itow:
+                missing = NEEDED - b["present"]
                 if missing:
-                    # přelož na názvy
-                    missing_n = {MSG_NAMES.get(m, f"{m[0]:02X}/{m[1]:02X}") for m in missing}
-                    self.log.warning("Epoch %d: chybí %s", itow, missing_n)
+                    span_ms = (b["last_ts"] - b["first_ts"]) * 1000.0
+                    self.log.warning(
+                        "Epoch %d INCOMPLETE: missing=%s, span_ms=%.1f, have=%s",
+                        itow,
+                        {MSG_NAMES.get(m, f"{m[0]:02X}/{m[1]:02X}") for m in missing},
+                        span_ms,
+                        {MSG_NAMES.get(m, f"{m[0]:02X}/{m[1]:02X}") for m in b["present"]},
+                    )
+                to_delete.append(itow)
+        for itow in to_delete:
+            self.epoch_map.pop(itow, None)
+
+    def flush_timeouts(self, now_monotonic: float):
+        """Volitelně: force-flush bucketů starších než timeout (od first_ts)."""
+        if self.bucket_timeout_ms is None:
+            return
+        timeout_s = self.bucket_timeout_ms / 1000.0
+        to_delete = []
+        for itow, b in self.epoch_map.items():
+            if now_monotonic - b["first_ts"] >= timeout_s:
+                missing = NEEDED - b["present"]
+                span_ms = (b["last_ts"] - b["first_ts"]) * 1000.0
+                if missing:
+                    self.log.warning(
+                        "Epoch %d TIMEOUT: missing=%s, span_ms=%.1f, have=%s",
+                        itow,
+                        {MSG_NAMES.get(m, f"{m[0]:02X}/{m[1]:02X}") for m in missing},
+                        span_ms,
+                        {MSG_NAMES.get(m, f"{m[0]:02X}/{m[1]:02X}") for m in b["present"]},
+                    )
                 else:
-                    self.log.debug("Epoch %d: kompletní PRIO set", itow)
-                self.last_eoe_itow = itow
-            else:
-                s = self.epoch_map.setdefault(itow, set())
-                s.add((cls, mid))
+                    # teoreticky už zalogováno při COMPLETE, ale kdyby ne:
+                    if not b["complete_logged"]:
+                        self.span_hist.append(span_ms)
+                        self.log.info("Epoch %d COMPLETE(timeout): span_ms=%.1f", itow, span_ms)
+                to_delete.append(itow)
+        for itow in to_delete:
+            self.epoch_map.pop(itow, None)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", default="/dev/ttyACM0")
+    ap.add_argument("--port", default="/dev/gnss1")
     ap.add_argument("--baud", type=int, default=921600)
     ap.add_argument("--prio", type=int, default=10, help="PRIO výstupní frekvence (0..30 Hz)")
     ap.add_argument("--log", default="gnss.log")
+    ap.add_argument("--bucket-w-ms", type=int, default=None,
+                    help="Volitelný timeout bucketu (ms) od první zprávy; None = nepoužívat")
     args = ap.parse_args()
 
-    svc = GNSSService(args.port, args.baud, args.log, args.prio)
-    try:
-        svc.run()
-    except KeyboardInterrupt:
-        pass
+    svc = GNSSService(args.port, args.baud, args.log, args.prio, bucket_timeout_ms=args.bucket_w_ms)
+    svc.run()
 
 
 if __name__ == "__main__":
