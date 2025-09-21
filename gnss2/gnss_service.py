@@ -116,7 +116,7 @@ class GNSSService:
     def start_threads(self):
         threading.Thread(target=self.reader_loop, name="ubx-reader", daemon=True).start()
         threading.Thread(target=self.writer_loop, name="ubx-writer", daemon=True).start()
-        #threading.Thread(target=self.poller_loop, name="poller", daemon=True).start()
+        threading.Thread(target=self.poller_loop, name="poller", daemon=True).start()
 
     def reader_loop(self):
         byte_iter = SerialBytes(self.ser)
@@ -352,7 +352,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", default="/dev/gnss1")
     ap.add_argument("--baud", type=int, default=921600)
-    ap.add_argument("--prio", type=int, default=10, help="PRIO výstupní frekvence (0..30 Hz)")
+    ap.add_argument("--prio", type=int, default=30, help="PRIO výstupní frekvence (0..30 Hz)")
     ap.add_argument("--log", default="gnss.log")
     ap.add_argument("--bucket-w-ms", type=int, default=None,
                     help="Volitelný timeout bucketu (ms) od první zprávy; None = nepoužívat")

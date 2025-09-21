@@ -25,7 +25,7 @@ def make_initial_config(prio_hz=10, enable_nav_eoe=True):
 
     # --- Rate / PRIO ---
     #meas_ms = 33 if prio_hz >= 30 else 500   # 33ms≈30Hz, 100ms=10Hz
-    meas_ms = 250
+    meas_ms = 150
     items += [
         (K.CFG_RATE_MEAS,     meas_ms, 'U2'),
         (K.CFG_RATE_NAV,      1,       'U2'),
