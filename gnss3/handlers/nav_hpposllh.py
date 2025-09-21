@@ -8,12 +8,14 @@ class NavHpposllhHandler:
         self.bin_stream_fifo = bin_stream_fifo
         self._fifo_lock = fifo_lock or threading.Lock()
         self.dropped = 0  # počítadlo zahozených zpráv
+        self.count = 0
 
     def handle(self, msg_class, msg_id, payload):
         if len(payload) != 36:
             print("[HPPOSLLH] Wrong payload length:", len(payload))
             return
-
+        self.count += 1
+            
         (version, reserved0_0, reserved0_1, flags, iTOW, lon, lat, height, hMSL,
          lonHp, latHp, heightHp, hMSLHp, hAcc, vAcc) = struct.unpack('<BBB B I i i i i b b b b I I', payload)
 
@@ -25,7 +27,8 @@ class NavHpposllhHandler:
         )
         self.context = ctx
 
-        #print(f"[HPPOSLLH] {iTOW} {'INVALID' if invalidLlh else 'OK'}  lon={lon} lat={lat} hAcc={hAcc/10:.1f}mm")
+        if self.count % 100 == 0:
+            print(f"[HPPOSLLH] {iTOW} {'INVALID' if invalidLlh else 'OK'}  lon={lon} lat={lat} hAcc={hAcc/10:.1f}mm")
 
         # -- Binární stream do FIFO, thread-safe, full→get→put --
         if self.bin_stream_fifo is not None:

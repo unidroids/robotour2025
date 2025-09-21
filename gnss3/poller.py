@@ -1,16 +1,8 @@
 import threading
 import time
 
-from builders import build_mon_sys_poll, build_mon_comms_poll
-
-default_poll_table = [
-    {"name": "MON-SYS",   "builder": build_mon_sys_poll,   "interval": 5.0},
-    #{"name": "MON-COMMS", "builder": build_mon_comms_poll, "interval": 10.0},
-    # atd. přidáš další, pokud potřebuješ
-]
-
 class RotatingPollerThread(threading.Thread):
-    def __init__(self, send_func, poll_table=default_poll_table, period=10.0):
+    def __init__(self, send_func, poll_table, period=2.0):
         """
         send_func: funkce (bytes) → zápis na writer.send_ubx()
         poll_table: list of dicts, např.:

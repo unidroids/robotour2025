@@ -228,9 +228,9 @@ PROFILE_PHYSICAL: Dict[str, float] = {
     "CFG-NAVSPG-DYNMODEL": 11,
 
     # lever-arms (cm)
-    "CFG-SFCORE-IMU2CRP_LA_X": -28,
-    "CFG-SFCORE-IMU2CRP_LA_Y": -1,
-    "CFG-SFCORE-IMU2CRP_LA_Z": -93,
+    "CFG-SFCORE-IMU2CRP_LA_X": 0, #-28,
+    "CFG-SFCORE-IMU2CRP_LA_Y": 0, #-1,
+    "CFG-SFCORE-IMU2CRP_LA_Z": 0, #-93,
 
     "CFG-SFODO-IMU2VRP_LA_X": -28,
     "CFG-SFODO-IMU2VRP_LA_Y": -1,
