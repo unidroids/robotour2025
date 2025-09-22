@@ -9,6 +9,7 @@ class NavHpposllhHandler:
         self._fifo_lock = fifo_lock or threading.Lock()
         self.dropped = 0  # počítadlo zahozených zpráv
         self.count = 0
+        self._last_print_sec = None
 
     def handle(self, msg_class, msg_id, payload):
         if len(payload) != 36:
@@ -27,7 +28,10 @@ class NavHpposllhHandler:
         )
         self.context = ctx
 
-        if self.count % 100 == 0:
+        sec = iTOW // 1000
+        if self._last_print_sec is None or sec != self._last_print_sec:
+            self._last_print_sec = sec
+
             print(f"[HPPOSLLH] {iTOW} {'INVALID' if invalidLlh else 'OK'}  lon={lon} lat={lat} hAcc={hAcc/10:.1f}mm")
 
         # -- Binární stream do FIFO, thread-safe, full→get→put --

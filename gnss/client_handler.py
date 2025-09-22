@@ -19,7 +19,7 @@ def client_thread(sock, addr, service):
             if not line:
                 break
             line = line.decode('utf-8').strip()
-            print(f"[SERVER] Received command: {line}")
+            #print(f"[SERVER] Received command: {line}")
             try:
                 if line == "PING":
                     f.write(b'PONG GNSS\n')

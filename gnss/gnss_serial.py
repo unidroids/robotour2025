@@ -10,7 +10,7 @@ UBX_SYNC_1 = 0xB5
 UBX_SYNC_2 = 0x62
 
 class GnssSerialIO:
-    def __init__(self, device='/dev/gnss1', baudrate=115200, read_fifo_size=30, write_fifo_size=30):
+    def __init__(self, device='/dev/gnss1', baudrate=921600, read_fifo_size=60, write_fifo_size=60):
         self.device = device
         self.baudrate = baudrate
         self._ser = None

@@ -9,6 +9,7 @@ class NavVelNedHandler:
         self._fifo_lock = fifo_lock or threading.Lock()
         self.dropped = 0
         self.count = 0
+        self._last_print_sec = None
 
     def handle(self, msg_class, msg_id, payload):
         if len(payload) != 36:
@@ -22,7 +23,11 @@ class NavVelNedHandler:
             sAcc=sAcc, cAcc=cAcc, timestamp=time.time()
         )
         self.context = ctx
-        if self.count % 100 == 0:
+        
+        sec = iTOW // 1000
+        if self._last_print_sec is None or sec != self._last_print_sec:
+            self._last_print_sec = sec
+            
             print(f"[VELNED] {iTOW}  speed={speed/100:.2f}m/s gSpeed={gSpeed/100:.2f} heading={heading/1e5:.2f}°")
 
         if self.bin_stream_fifo is not None:

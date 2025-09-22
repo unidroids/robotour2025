@@ -15,15 +15,10 @@ from handlers.mon_sys import MonSysHandler
 from handlers.mon_comms import MonCommsHandler
 from handlers.esf_status import EsfStatusHandler
 from handlers.ack import AckHandler
-
-from builders import build_mon_sys_poll, build_mon_comms_poll, build_esf_status_poll
-
-# Konfigurace polleru – přidej/ubírej podle potřeby
-POLL_TABLE = [
-    {"name": "MON-SYS",   "builder": build_mon_sys_poll},
-    {"name": "MON-COMMS", "builder": build_mon_comms_poll},
-    {"name": "ESF-STATUS","builder": build_esf_status_poll},
-]
+from handlers.esf_meas import EsfMeasHandler
+from handlers.nav_att import NavAttHandler
+from handlers.esf_raw import EsfRawHandler
+from handlers.nav_pvat import NavPvatHandler
 
 SERIAL_DEVICE = '/dev/gnss1'
 
@@ -42,10 +37,10 @@ class GnssService:
             return "ALREADY_RUNNING"
         self.gnss = GnssSerialIO(SERIAL_DEVICE)
         self.gnss.open()
-        self.poller = RotatingPollerThread(self.gnss.send_ubx, POLL_TABLE, period=2.0)
+        self.poller = RotatingPollerThread(self.gnss.send_ubx)
         self.poller.start()
         self.dispatcher = UbxDispatcher(self.gnss)
-        self.dispatcher.register_handler(0x01, 0x05, DummyHandler())
+        #self.dispatcher.register_handler(0x01, 0x05, DummyHandler())
         self.dispatcher.register_handler(0x01, 0x14, self.hpposllh_handler)
         self.dispatcher.register_handler(0x01, 0x12, NavVelNedHandler(self.bin_stream_fifo, self.fifo_lock))
         self.dispatcher.register_handler(0x10, 0x15, EsfInsHandler(self.bin_stream_fifo, self.fifo_lock))
@@ -54,6 +49,11 @@ class GnssService:
         self.dispatcher.register_handler(0x10, 0x10, EsfStatusHandler())
         self.dispatcher.register_handler(0x05, 0x00, AckHandler()) # NAK
         self.dispatcher.register_handler(0x05, 0x01, AckHandler()) # ACK
+        self.dispatcher.register_handler(0x10, 0x02, EsfMeasHandler())
+        self.dispatcher.register_handler(0x01, 0x05, NavAttHandler())
+        self.dispatcher.register_handler(0x10, 0x03, EsfRawHandler())
+        self.dispatcher.register_handler(0x01, 0x17, NavPvatHandler(self.bin_stream_fifo, self.fifo_lock))
+
         self.dispatcher.start()
         self.running = True
         print("[SERVICE] STARTED")

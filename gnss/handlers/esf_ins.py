@@ -9,6 +9,7 @@ class EsfInsHandler:
         self._fifo_lock = fifo_lock or threading.Lock()
         self.dropped = 0
         self.count = 0
+        self._last_print_sec = None
 
     def handle(self, msg_class, msg_id, payload):
         if len(payload) != 36:
@@ -50,8 +51,9 @@ class EsfInsHandler:
         )
         self.context = ctx
 
-        # Podrobný log každých 100 zpráv
-        if self.count % 100 == 0: # or not (xAngRateValid or yAngRateValid or zAngRateValid):
+        sec = iTOW // 1000
+        if self._last_print_sec is None or sec != self._last_print_sec:
+            self._last_print_sec = sec            
             print(f"[ESF-INS] {iTOW} v={version} "
                   f"xAngRate={xAngRate/1e3 if xAngRateValid else 'N/A'} ({xAngRateValid}) | "
                   f"yAngRate={yAngRate/1e3 if yAngRateValid else 'N/A'} ({yAngRateValid}) | "

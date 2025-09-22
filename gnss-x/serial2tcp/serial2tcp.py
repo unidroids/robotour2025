@@ -3,7 +3,7 @@ import serial
 import threading
 
 DEVICE = '/dev/gnss1'
-BAUD = 115200
+BAUD = 921600 #115200
 TCP_PORT = 5000
 
 def read_serial(ser, conn):

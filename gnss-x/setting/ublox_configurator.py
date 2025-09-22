@@ -225,41 +225,41 @@ class TcpTransport(Transport):
 # =========================
 
 PROFILE_PHYSICAL: Dict[str, float] = {
-    "CFG-NAVSPG-DYNMODEL": 11,
+    "CFG-NAVSPG-DYNMODEL": 11, #11,
 
     # lever-arms (cm)
     "CFG-SFCORE-IMU2CRP_LA_X": 0, #-28,
     "CFG-SFCORE-IMU2CRP_LA_Y": 0, #-1,
     "CFG-SFCORE-IMU2CRP_LA_Z": 0, #-93,
 
-    "CFG-SFODO-IMU2VRP_LA_X": -28,
-    "CFG-SFODO-IMU2VRP_LA_Y": -1,
-    "CFG-SFODO-IMU2VRP_LA_Z": -93,
+    "CFG-SFODO-IMU2VRP_LA_X": 0, #-28,
+    "CFG-SFODO-IMU2VRP_LA_Y": 0, #-1,
+    "CFG-SFODO-IMU2VRP_LA_Z": 0, #-93,
 
-    "CFG-SFIMU-IMU2ANT_LA_X": 4,
-    "CFG-SFIMU-IMU2ANT_LA_Y": -1,
-    "CFG-SFIMU-IMU2ANT_LA_Z": 3,
+    "CFG-SFIMU-IMU2ANT_LA_X": 0, #4,
+    "CFG-SFIMU-IMU2ANT_LA_Y": 0, #-1,
+    "CFG-SFIMU-IMU2ANT_LA_Z": 0, #3,
 
     # IMU mount (user-defined)
-    "CFG-SFIMU-AUTO_MNTALG_ENA": 0,    # manual alignment
-    "CFG-SFIMU-IMU_MNTALG_YAW": 90.0,  # deg -> *100
-    "CFG-SFIMU-IMU_MNTALG_PITCH": 0.0, # deg -> *100
-    "CFG-SFIMU-IMU_MNTALG_ROLL": 0.0,  # deg -> *100
+    "CFG-SFIMU-AUTO_MNTALG_ENA": 1, #0,    # manual alignment
+    "CFG-SFIMU-IMU_MNTALG_YAW": 0, #90.0,  # deg -> *100
+    "CFG-SFIMU-IMU_MNTALG_PITCH": 0, #2.0, # deg -> *100
+    "CFG-SFIMU-IMU_MNTALG_ROLL": 0, #0.0,  # deg -> *100
     "CFG-SFIMU-IMU_MNTALG_TOLERANCE": 0,  # LOW
 
     # Wheel model (geometry)
-    "CFG-SFODO-FACTOR": 0.008866,      # m/tick (10" + 90 ticks/rot)
-    "CFG-SFODO-QUANT_ERROR": 0.008866, # m (quantization step)
-    "CFG-SFODO-COUNT_MAX": 8388607,    # 2^23 - 1 (absolute ticks rollover-1)
+    "CFG-SFODO-FACTOR": 0, #0.008866,      # m/tick (10" + 90 ticks/rot)
+    "CFG-SFODO-QUANT_ERROR": 0, #0.008866, # m (quantization step)
+    "CFG-SFODO-COUNT_MAX": 1, #8388607,    # 2^23 - 1 (absolute ticks rollover-1)
 }
 
 PROFILE_OPERATIONAL: Dict[str, int] = {
     # ESF/Odo behavior
-    "CFG-SFODO-LATENCY": 2,             # ms
-    "CFG-SFODO-FREQUENCY": 10,          # Hz
+    "CFG-SFODO-LATENCY": 0, #1,             # ms
+    "CFG-SFODO-FREQUENCY": 0, #10,          # Hz
     "CFG-SFODO-COMBINE_TICKS": 1,
     "CFG-SFODO-USE_SPEED": 0,
-    "CFG-SFODO-DIS_AUTOCOUNTMAX": 1,
+    "CFG-SFODO-DIS_AUTOCOUNTMAX": 0,
     "CFG-SFODO-DIS_AUTODIRPINPOL": 1,   # per RLM recommendation
     "CFG-SFODO-DIS_AUTOSPEED": 1,
     "CFG-SFODO-CNT_BOTH_EDGES": 0,
@@ -340,7 +340,7 @@ def parse_layers(s: str) -> int:
 def main():
     ap = argparse.ArgumentParser(description="u-blox ZED-F9R configurator (VALSET)")
     g1 = ap.add_mutually_exclusive_group(required=True)
-    g1.add_argument("--serial", help="Serial device (e.g., /dev/ttyACM0)", default=None)
+    g1.add_argument("--serial", help="Serial device (e.g., /dev/ttyACM0)", default="/dev/gnss1")
     g1.add_argument("--tcp", help="TCP host:port (e.g., 192.168.1.10:2000)", default=None)
     ap.add_argument("--baud", type=int, default=115200, help="Serial baudrate (ignored on USB CDC ACM)")
     ap.add_argument("--set", choices=["physical", "operational", "all"], default="physical",
