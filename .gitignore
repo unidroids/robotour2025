@@ -29,8 +29,8 @@ server/robot_lidar_tcp
 *.graphml
 
 # point perfect
-gnss/point_perfect/*.txt
-gnss/point_perfect/*.ubx
+gnss*/point_perfect/*.txt
+gnss*/point_perfect/*.ubx
 
 # env data
 **/.env
