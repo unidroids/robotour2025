@@ -30,9 +30,9 @@ def client_thread(sock, addr, service):
                     res = service.stop()
                     f.write((res+'\n').encode('utf-8'))
                 elif line == "EXIT":
-                    f.write(b'EXITING\n')
-                    service.stop()
-                    sys.exit(0)
+                    f.write(b'GNSS-BYE\n')
+                    f.flush()
+                    break
                 elif line == "DATA":
                     if not ensure_gnss(f, service): continue
                     json_data = service.get_data_json()

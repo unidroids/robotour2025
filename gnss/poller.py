@@ -8,7 +8,7 @@ from builders import build_poll_esf_raw
 
 # Konfigurace polleru – přidej/ubírej podle potřeby
 POLL_TABLE = [
-    {"name": "MON-SYS",   "builder": build_mon_sys_poll},
+    #{"name": "MON-SYS",   "builder": build_mon_sys_poll},
     #{"name": "MON-COMMS", "builder": build_mon_comms_poll},
     {"name": "ESF-STATUS","builder": build_esf_status_poll},
     #{"name": "ESF-RAW","builder": build_poll_esf_raw},
@@ -16,7 +16,7 @@ POLL_TABLE = [
 
 
 class RotatingPollerThread(threading.Thread):
-    def __init__(self, send_func, poll_table=POLL_TABLE, period=1.0):
+    def __init__(self, send_func, poll_table=POLL_TABLE, period=5.0):
         """
         send_func: funkce (bytes) → zápis na writer.send_ubx()
         poll_table: list of dicts, např.:
