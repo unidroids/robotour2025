@@ -9,7 +9,7 @@ class GnssParseResult:
     PROCESSING = 'processing'         # Ještě nesložená věta
     NMEA = 'nmea'                     # Validní NMEA věta
     UBX = 'ubx'                       # Validní UBX zpráva
-    CORRUPTED = 'corrupted'           # Rozpoznaná nekorektní sekvence / desync
+    CORRUPTED = 'corrupted'           # Rozpoznaná nekorektní sekvence / desync / junk blok
     CHECKSUM_ERROR = 'checksum_error' # Špatný checksum
 
 # ----------------------- Hlavní parser -----------------------
@@ -22,7 +22,7 @@ class GnssStreamParser:
     UBX_SYNC_1 = 0xB5
     UBX_SYNC_2 = 0x62
 
-    def __init__(self, max_ubx_payload: int = 8192):
+    def __init__(self, max_ubx_payload: int = 8192, junk_flush_len: int = 64):
         # Obecný stav
         self.state = 'IDLE'
         # NMEA
@@ -36,6 +36,9 @@ class GnssStreamParser:
         self.ubx_cksum = bytearray()
         self.expected_payload_len = 0
         self.max_ubx_payload = max_ubx_payload
+        # JUNK
+        self.junk_buf = bytearray()
+        self.junk_flush_len = junk_flush_len  # flush po dosažení této délky
 
     # ---------- Pomůcky ----------
     @staticmethod
@@ -58,6 +61,17 @@ class GnssStreamParser:
             ck_b = (ck_b + ck_a) & 0xFF
         return (ck_a, ck_b)
 
+    # ---------- Interní startery ----------
+    def _start_nmea(self):
+        self.nmea_buf = bytearray([ord('$')])
+        self.nmea_running_xor = 0
+        self.nmea_hex1 = None
+        self.nmea_hex2 = None
+        self.state = 'NMEA_HEADER'
+
+    def _start_ubx(self):
+        self.state = 'UBX_SYNC2'
+
     # ---------- API ----------
     def feed(self, b: int):
         """
@@ -66,28 +80,51 @@ class GnssStreamParser:
         typ ∈ {processing, nmea, ubx, corrupted, checksum_error}
         data_bytes jsou kompletní byty dané zprávy (kopie až při dokončení věty).
         """
-        # --------- Čekání na začátky věty ----------
+        # --------- Čekání na začátky věty / start JUNK ----------
         if self.state == 'IDLE':
             if b == ord('$'):
-                # NMEA start
-                self.nmea_buf = bytearray([b])
-                self.nmea_running_xor = 0  # XOR všech bajtů mezi '$' a '*'
-                self.nmea_hex1 = None
-                self.nmea_hex2 = None
-                self.state = 'NMEA_HEADER'
+                self._start_nmea()
                 return (GnssParseResult.PROCESSING, None)
             elif b == self.UBX_SYNC_1:
-                # UBX možný start
-                self.state = 'UBX_SYNC2'
+                self._start_ubx()
                 return (GnssParseResult.PROCESSING, None)
             else:
-                # Neznámý bajt mimo větu – ignoruj
+                # start agregovaného JUNKu
+                self.junk_buf = bytearray([b])
+                self.state = 'JUNK'
+                return (GnssParseResult.PROCESSING, None)
+
+        # --------- Agregovaný JUNK blok ----------
+        elif self.state == 'JUNK':
+            # pokud narazíme na start věty, flush JUNK a současně interně nastartujeme novou větu
+            if b == ord('$') or b == self.UBX_SYNC_1:
+                out = bytes(self.junk_buf)
+                # nastartuj novou větu uvnitř tohoto feedu (start-bajt neztrácíme)
+                if b == ord('$'):
+                    self._start_nmea()
+                else:
+                    self._start_ubx()
+                # vyprázdni junk
+                self.junk_buf = bytearray()
+                # signalizuj callerovi junk blok; další feed() bude plynule pokračovat v nové větě
+                return (GnssParseResult.CORRUPTED, out)
+            else:
+                self.junk_buf.append(b)
+                if len(self.junk_buf) >= self.junk_flush_len:
+                    out = bytes(self.junk_buf)
+                    self.junk_buf = bytearray()
+                    self.state = 'IDLE'
+                    return (GnssParseResult.CORRUPTED, out)
                 return (GnssParseResult.PROCESSING, None)
 
         # --------- Parsování NMEA věty (byte-based XOR, bez decode) ----------
         elif self.state == 'NMEA_HEADER':
             # Očekáváme dalších 5 znaků hlavičky ($ + 5 = 6 bajtů celkem)
             self.nmea_buf.append(b)
+            # zahrnout hlavičku do XOR (vše mezi '$' a '*')
+            if len(self.nmea_buf) >= 2 and len(self.nmea_buf) <= 6:
+                self.nmea_running_xor ^= b
+
             if len(self.nmea_buf) == 6:
                 # Validace hlavičky: $TTSSS (TT=alnum, SSS=alnum)
                 t1, t2, s1, s2, s3 = self.nmea_buf[1:6]
@@ -97,7 +134,6 @@ class GnssStreamParser:
                     self.state = 'IDLE'
                     return (GnssParseResult.CORRUPTED, buf)
                 self.state = 'NMEA_BODY'
-            # hlavička ještě není celá
             return (GnssParseResult.PROCESSING, None)
 
         elif self.state == 'NMEA_BODY':
@@ -227,7 +263,6 @@ def main():
     p = GnssStreamParser()
 
     print("--- TEST NMEA OK ---")
-    # Správně: spočteme checksum programově, ať se nespleteme ručně
     nmea_ok = _nmea_build("GPGGA,1234,5678")  # checksum = 0x5E
     for b in nmea_ok:
         typ, msg = p.feed(b)
@@ -235,11 +270,9 @@ def main():
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST NMEA CHKSUM ERROR ---")
-    # Vezmeme správnou větu a záměrně zkazíme poslední hex digit checksumu
     nmea_bad = bytearray(nmea_ok)
-    # Poslední 4 bajty jsou: HEX1 HEX2 \r \n → zkusíme změnit HEX2
     if len(nmea_bad) >= 4:
-        # jednoduché poškození: inkrementace ASCII HEX
+        # poškodíme poslední hex digit checksumu
         if nmea_bad[-4] in b"0123456789ABCDEF":
             nmea_bad[-4] = ord('0') if nmea_bad[-4] == ord('F') else (nmea_bad[-4] + 1)
     for b in bytes(nmea_bad):
@@ -248,7 +281,6 @@ def main():
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST UBX OK ---")
-    # UBX zpráva: B5 62 01 02 04 00 AA BB CC DD CS1 CS2
     payload = [0xAA, 0xBB, 0xCC, 0xDD]
     header = [0x01, 0x02, 0x04, 0x00]
     data = bytearray(header + payload)
@@ -267,21 +299,22 @@ def main():
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST RANDOM JUNK ---")
-    junk = b"XQWERTY12345"
+    junk = b"XQWERTY12345" + b"$"
     for b in junk:
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST NMEA IN RANDOM JUNK ---")
-    mix = b"junk1" + _nmea_build("GPRMC,1,2,3") + b"junk2"
+    mix = b"junk1" + _nmea_build("GPRMC,1,2,3") + b"junk2" + b"$"
     for b in mix:
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST UBX IN RANDOM JUNK ---")
-    mix2 = b"abc" + ubx + b"def"
+    # Použijeme ten samý ubx z výše
+    mix2 = b"abc" + ubx + b"def" + b"$"
     for b in mix2:
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
