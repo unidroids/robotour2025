@@ -2,6 +2,7 @@
 import sys
 import json
 from builders import build_odo, build_perfect, build_prio_on, build_prio_off
+from builders.poll_gga import build_gnq_gga_poll
 
 def ensure_gnss(f, service):
     if not service.gnss:
@@ -33,6 +34,10 @@ def client_thread(sock, addr, service):
                     f.write(b'GNSS-BYE\n')
                     f.flush()
                     break
+                elif line == "GGA":
+                    if not ensure_gnss(f, service): continue
+                    #ubx = build_gnq_gga_poll()
+                    #service.gnss.send_ubx(ubx)
                 elif line == "DATA":
                     if not ensure_gnss(f, service): continue
                     json_data = service.get_data_json()

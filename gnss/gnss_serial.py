@@ -82,6 +82,8 @@ class GnssSerialIO:
                 if sync == 0:
                     if b == UBX_SYNC_1:
                         sync = 1
+                    else:
+                        print(f"[GnssSerialIO] Desync byte: 0x{b:02X}")
                 elif sync == 1:
                     if b == UBX_SYNC_2:
                         sync = 2
