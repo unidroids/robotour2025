@@ -28,6 +28,7 @@
     e.g. /dev/ttyACM0 or COM3. Optionally with baudrate, e.g. /dev/ttyACM0@115200.
 """
 
+import datetime
 import argparse
 import base64
 from dataclasses import dataclass
@@ -43,6 +44,17 @@ from typing import NamedTuple
 
 # pip install pyserial
 import serial
+
+
+logging.basicConfig(
+    level=logging.DEBUG,  # nebo INFO pokud nechceš úplně všechno
+    format="%(asctime)s %(levelname)s %(threadName)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("/data/logs/pointperfect/pointperfect_full.log"),
+    ]
+)
 
 SOCKET_RECONNECT_DELAY = 10    # seconds of delay before retry after socket error
 SERVER_RECONNECT_DELAY = 60    # seconds of delay before retry after server error
@@ -170,7 +182,7 @@ class NtripClient:
                     sock = context.wrap_socket(sock, server_hostname=self.host)
                 sock.settimeout(SOCKET_TIMEOUT)
                 sock.connect((self.host, self.port))
-
+                logging.info("Connected to %s:%d at %s", self.host, self.port, datetime.datetime.now().isoformat(timespec="seconds"))
                 # send the request
                 sock.send(self.__make_request(name))
                 # read a chunk of data, expecting to get the status line and headers
@@ -211,7 +223,8 @@ class NtripClient:
                         else:
                             delay = SERVER_RECONNECT_DELAY
                             logging.warning(
-                                "Connection closed by server, reconnecting in %d seconds", delay
+                                "Connection closed by server, reconnecting in %d seconds at %s", delay,
+                                datetime.datetime.now().isoformat(timespec="seconds")
                             )
                             break
                     except TimeoutError:
@@ -219,11 +232,13 @@ class NtripClient:
 
             except (socket.herror, socket.gaierror):
                 delay = SOCKET_RECONNECT_DELAY
-                logging.warning("Error connecting to server %s:%d, retrying in %d seconds",
-                                self.host, self.port, delay)
+                logging.warning("Error connecting to server %s:%d, retrying in %d seconds at %s",
+                                self.host, self.port, delay,
+                                datetime.datetime.now().isoformat(timespec="seconds"))
             except TimeoutError:
                 delay = SOCKET_RECONNECT_DELAY
-                logging.warning("Connection timeout, retrying in %d seconds", delay)
+                logging.warning("Connection timeout, retrying in %d seconds at %s", delay,
+                                datetime.datetime.now().isoformat(timespec="seconds"))
 
             # close the socket
             self.sock = None

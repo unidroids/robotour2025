@@ -122,7 +122,7 @@ class NavPvatHandler:
                 f"fix={fixType} SV={numSV} ({flags_msg}) "
                 f"lat={lat/1e7:.7f} lon={lon/1e7:.7f} hEll={height/1000:.2f}m hMSL={hMSL/1000:.2f}m "
                 f"gSpd={gSpeed/1000:.3f}m/s vN={velN/1000:.3f} vE={velE/1000:.3f} vD={velD/1000:.3f} sAcc={sAcc/1000:.3f}m/s "
-                f"roll={vehRoll/1e5:.2f}°({accRoll/100:.2f}) pitch={vehPitch/1e5:.2f}°({accPitch/100:.2f}) hdg={vehHeading/1e5:.2f}°({accHeading/100:.2f}) "
+                f"roll={vehRoll/1e5:.2f}°({accRoll/100:.2f}) pitch={vehPitch/1e5:.2f}°({accPitch/100:.2f}) hdg={vehHeading/1e5:.2f}°({accHeading/100:.2f}) mot={motHeading/1e5:.2f}° "
                 f"hAcc={hAcc/1000:.3f}m vAcc={vAcc/1000:.3f}m "
             )
 

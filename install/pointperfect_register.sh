@@ -4,11 +4,15 @@ set -e
 SERVICE_PATH="/etc/systemd/system/robot-pointperfect.service"
 LOG_DIR="/robot/data/logs/pointperfect"
 LOG_FILE="$LOG_DIR/pointperfect.log"
+FULL_LOG_FILE="$LOG_DIR/pointperfect_full.log"
 
 echo "📁 Creating log directory..."
 sudo mkdir -p "$LOG_DIR"
 sudo touch "$LOG_FILE"
 sudo chmod 664 "$LOG_FILE"
+sudo touch "$FULL_LOG_FILE"
+sudo chmod 664 "$FULL_LOG_FILE"
+sudo chown -R user:user "$LOG_DIR"
 
 echo "🛠  Creating systemd service robot-pointperfect"
 

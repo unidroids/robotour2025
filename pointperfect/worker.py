@@ -25,10 +25,12 @@ DEFAULT_PASS = os.getenv("POINTPERFECT_PASS", "")
 
 class PointPerfectWorker:
     def __init__(self):
-        self.thread = None
         self.stop_event = threading.Event()
         self.msg_count = 0
         self.running = False
+        self.stop_event = threading.Event()
+        self.thread = None
+        self._lock = threading.Lock()        
 
     def is_running(self) -> bool:
         return self.running
@@ -37,22 +39,26 @@ class PointPerfectWorker:
         return self.msg_count
 
     def start(self):
-        if self.running:
-            return
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-        self.running = True
-        print("▶️ PointPerfect vlákno spuštěno")
+        with self._lock:
+            if self.running:
+                print("▶️ PointPerfect již běží.")
+                return
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._run, daemon=True)
+            self.thread.start()
+            self.running = True
+            print("▶️ PointPerfect vlákno spuštěno")
 
     def stop(self):
-        if not self.running:
-            return
-        self.stop_event.set()
-        if self.thread:
-            self.thread.join(timeout=2.0)
-        self.running = False
-        print("⏹️ PointPerfect vlákno zastaveno")
+        with self._lock:
+            if not self.running:
+                print("⏹️ PointPerfect není spuštěn.")
+                return
+            self.stop_event.set()
+            if self.thread:
+                self.thread.join(timeout=3.0)
+            self.running = False
+            print("⏹️ PointPerfect vlákno zastaveno")
 
     def _run(self):
         try:
