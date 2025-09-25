@@ -171,7 +171,7 @@ class NtripClient:
 
     def stream_data(self, name, callback):
         self.streaming = True
-        delay = 0
+        delay = 10
         while self.streaming:
             try:
                 # create a socket connection to the host and port
@@ -230,7 +230,8 @@ class NtripClient:
                     except TimeoutError:
                         timeouts += 1
 
-            except (socket.herror, socket.gaierror):
+            #except (socket.herror, socket.gaierror):
+            except (socket.herror, socket.gaierror, ConnectionError, socket.error) as e:              
                 delay = SOCKET_RECONNECT_DELAY
                 logging.warning("Error connecting to server %s:%d, retrying in %d seconds at %s",
                                 self.host, self.port, delay,
