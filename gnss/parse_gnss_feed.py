@@ -98,12 +98,11 @@ class GnssStreamParser:
 
         # NMEA
         elif self.state == 'NMEA_HEADER':
-            # ochrana: nový start uprostřed hlavičky
+            # nový start uprostřed hlavičky
             if b == ord('$'):
                 buf = bytes(self.nmea_buf) if self.nmea_buf else b'$'
                 self._start_nmea()
                 return (GnssParseResult.CORRUPTED, buf)
-
             if b == self.UBX_SYNC_1:
                 buf = bytes(self.nmea_buf) if self.nmea_buf else b'$'
                 self._start_ubx()
@@ -192,7 +191,7 @@ class GnssStreamParser:
                 self.state = 'UBX_HEADER'
                 return (GnssParseResult.PROCESSING, None)
             else:
-                # pokud druhý sync selže a dorazilo '$', nezaříznout ho – přepnout na NMEA
+                # pokud druhý sync selže a dorazilo '$', přepnout na NMEA
                 if b == ord('$'):
                     self._start_nmea()
                     self.state = 'NMEA_HEADER'
@@ -243,7 +242,7 @@ class GnssStreamParser:
         return (GnssParseResult.PROCESSING, None)
 
 
-# ---------- Unit test (main) ----------
+# ---------- Helpers & Unit test (main) ----------
 
 def _nmea_build(body_ascii: str) -> bytes:
     xorv = 0
@@ -251,7 +250,16 @@ def _nmea_build(body_ascii: str) -> bytes:
         xorv ^= ch
     return b'$' + body_ascii.encode('ascii') + b'*' + f"{xorv:02X}".encode('ascii') + b"\r\n"
 
+def _ubx_build(msg_class: int, msg_id: int, payload: bytes) -> bytes:
+    header = bytes([msg_class, msg_id, len(payload) & 0xFF, (len(payload) >> 8) & 0xFF])
+    ck_a, ck_b = GnssStreamParser._ubx_checksum(header)
+    # Pozor: UBX checksum se počítá jen přes CLASS, ID, LEN, PAYLOAD (bez SYNC1/2)
+    # my už máme v 'header' CLASS,ID,LEN; je potřeba počítat přes header+payload:
+    ck_a, ck_b = GnssStreamParser._ubx_checksum(header + payload)
+    return bytes([0xB5, 0x62]) + header + payload + bytes([ck_a, ck_b])
+
 def main():
+    # parser s limitem 512 B (výchozí)
     p = GnssStreamParser()
 
     print("--- TEST NMEA OK ---")
@@ -271,18 +279,17 @@ def main():
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST UBX OK ---")
-    payload = [0xAA, 0xBB, 0xCC, 0xDD]
-    header  = [0x01, 0x02, 0x04, 0x00]
-    data = bytearray(header + payload)
-    ck_a, ck_b = GnssStreamParser._ubx_checksum(data)
-    ubx = bytes([0xB5, 0x62] + header + payload + [ck_a, ck_b])
+    payload = bytes([0xAA, 0xBB, 0xCC, 0xDD])
+    header  = bytes([0x01, 0x02, len(payload) & 0xFF, (len(payload) >> 8) & 0xFF])
+    ck_a, ck_b = GnssStreamParser._ubx_checksum(header + payload)
+    ubx = bytes([0xB5, 0x62]) + header + payload + bytes([ck_a, ck_b])
     for b in ubx:
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
             print(f"TYPE: {typ}, MSG: {msg}")
 
     print("--- TEST UBX CHKSUM ERROR ---")
-    ubx_bad = bytes([0xB5, 0x62] + header + payload + [(ck_a + 1) & 0xFF, ck_b])
+    ubx_bad = ubx[:-2] + bytes([(ck_a + 1) & 0xFF, ck_b])
     for b in ubx_bad:
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
@@ -305,6 +312,26 @@ def main():
     print("--- TEST UBX IN RANDOM JUNK ---")
     mix2 = b"abc" + ubx + b"def" + b"$"
     for b in mix2:
+        typ, msg = p.feed(b)
+        if typ != GnssParseResult.PROCESSING:
+            print(f"TYPE: {typ}, MSG: {msg}")
+
+    # --------- NOVÉ: testy limitu délky ---------
+    print("--- TEST UBX LEN == LIMIT (512) ---")
+    p = GnssStreamParser(max_ubx_payload=512)
+    payload512 = bytes([i & 0xFF for i in range(512)])
+    ubx512 = _ubx_build(0x01, 0x02, payload512)
+    # mělo by projít jako validní UBX (ať si ověříme, že limit není příliš malý)
+    for b in ubx512:
+        typ, msg = p.feed(b)
+        if typ != GnssParseResult.PROCESSING:
+            print(f"TYPE: {typ}, MSG(len={len(msg)}): {msg[:16]}...")
+
+    print("--- TEST UBX LEN > LIMIT (513) ---")
+    p = GnssStreamParser(max_ubx_payload=512)
+    # Pošleme jen sync a hlavičku s LEN=513, parser má hned vrátit corrupted po dočtení hlavičky
+    header_over = bytes([0xB5, 0x62, 0x01, 0x02, 0x01, 0x02])  # class=1,id=2,len=0x0201=513
+    for i, b in enumerate(header_over):
         typ, msg = p.feed(b)
         if typ != GnssParseResult.PROCESSING:
             print(f"TYPE: {typ}, MSG: {msg}")

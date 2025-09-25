@@ -1,17 +1,25 @@
 # ubx_dispatcher.py
-
 import threading
-import sys
+from typing import Dict, Tuple
 
 class UbxDispatcher:
+    """
+    Čte raw UBX rámce z GnssSerialIO.get_ubx_frame() a předává je handlerům.
+    Předpoklad: rámce už jsou validované (sync, délka, checksum) v GnssSerialIO.
+    Handler je objekt s metodou:
+        handle(msg_class: int, msg_id: int, payload: bytes) -> None
+    """
+
     def __init__(self, gnss_serial):
         self.gnss_serial = gnss_serial
-        self.handlers = {}  # {(msg_class, msg_id): handler_instance}
+        self.handlers: Dict[Tuple[int, int], object] = {}
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
-    def register_handler(self, msg_class, msg_id, handler):
-        self.handlers[(msg_class, msg_id)] = handler
+    def register_handler(self, msg_class: int, msg_id: int, handler_obj: object):
+        if not hasattr(handler_obj, "handle") or not callable(getattr(handler_obj, "handle")):
+            raise TypeError("Handler must implement handle(msg_class, msg_id, payload)")
+        self.handlers[(msg_class, msg_id)] = handler_obj
 
     def start(self):
         self._stop_event.clear()
@@ -19,20 +27,25 @@ class UbxDispatcher:
 
     def stop(self):
         self._stop_event.set()
+        self._thread.join(timeout=0.5)
 
     def _run(self):
+        get_frame = self.gnss_serial.get_ubx_frame
         while not self._stop_event.is_set():
-            msg = self.gnss_serial.get_ubx_message(timeout=1.0)
-            if msg:
-                msg_class, msg_id, payload = msg
-                handler = self.handlers.get((msg_class, msg_id))
-                if handler:
-                    try:
-                        handler.handle(msg_class, msg_id, payload)
-                    except Exception as e:
-                        print(f"[Dispatcher] Handler error for 0x{msg_class:02X} 0x{msg_id:02X}: {e}", file=sys.stderr)
-                else:
-                    print(f"[Dispatcher] unhandled UBX 0x{msg_class:02X} 0x{msg_id:02X} ({len(payload)} bytes)")
+            frm = get_frame(timeout=1.0)
+            if not frm:
+                continue
+            # frm: [B5 62 class id len_lo len_hi payload... ckA ckB]
+            msg_class = frm[2]
+            msg_id    = frm[3]
+            length    = frm[4] | (frm[5] << 8)
+            payload   = frm[6:6+length]
+
+            handler = self.handlers.get((msg_class, msg_id))
+            if handler:
+                handler.handle(msg_class, msg_id, payload)
+            else:
+                print(f"[Dispatcher] unhandled UBX 0x{msg_class:02X} 0x{msg_id:02X} ({len(payload)} bytes)")
 
 # ------------- DEMO / TEST -------------
 if __name__ == '__main__':
@@ -49,7 +62,8 @@ if __name__ == '__main__':
 
     disp = UbxDispatcher(gnss)
     # Registrace pouze NAV-HPPOSLLH (0x01, 0x14)
-    disp.register_handler(0x01, 0x14, PrintHandler())
+    #disp.register_handler(0x01, 0x14, PrintHandler())
+    disp.register_handler(0x01, 0x17, PrintHandler())
 
     disp.start()
     try:
