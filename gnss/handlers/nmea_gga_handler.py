@@ -4,19 +4,15 @@ class NmeaGgaHandler:
     """
     Handler, který ukládá poslední GGA větu (neparsovanou) do kontextu služby.
     """
-    def __init__(self, context):
-        # context = objekt GNSS služby nebo cokoliv s ._last_gga
+    def __init__(self):
         self._last_gga = None
 
-    def handle(self, nmea_text):
+    def handle(self, sentence):
         """
         Zavolej tuto metodu pro každou příchozí GGA větu (text)
         """
-        # Ověř, že jde o GGA zprávu (bezpečnost)
-        if nmea_text.startswith("$GNGGA") or nmea_text.startswith("$GPGGA"):
-            self._last_gga = nmea_text
-            # volitelně: log, případně další akce
-            # print(f"[GGA handler] Uložena GGA: {nmea_text.strip()}")
+        self._last_gga = sentence
+        print(f"[NMEA-GGA] {sentence.decode().strip()}")
 
-    def get_gga(self):
+    def get_last_gga(self):
         return self._last_gga

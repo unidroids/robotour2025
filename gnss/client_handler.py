@@ -35,9 +35,11 @@ def client_thread(sock, addr, service):
                     f.flush()
                     break
                 elif line == "GGA":
-                    if not ensure_gnss(f, service): continue
-                    #ubx = build_gnq_gga_poll()
-                    #service.gnss.send_ubx(ubx)
+                    sent = service.get_gga() 
+                    if sent is not None:
+                        f.write(sent)
+                    else:
+                        f.write(b'')                    
                 elif line == "DATA":
                     if not ensure_gnss(f, service): continue
                     json_data = service.get_data_json()
