@@ -51,6 +51,7 @@ class GnssService:
         self.ubx_dispatcher = UbxDispatcher(self.gnss)
         self.ubx_dispatcher.register_handler(0x0a, 0x39, MonSysHandler())
         self.ubx_dispatcher.register_handler(0x01, 0x17, self.nav_pvat_handler)
+        self.ubx_dispatcher.register_handler(0x10, 0x03, EsfRawHandler())
         #self.dispatcher.register_handler(0x01, 0x05, DummyHandler())
         #self.ubx_dispatcher.register_handler(0x01, 0x14, self.hpposllh_handler)
         #self.ubx_dispatcher.register_handler(0x01, 0x12, NavVelNedHandler(self.bin_stream_fifo, self.fifo_lock))

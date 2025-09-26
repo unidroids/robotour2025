@@ -1,5 +1,5 @@
 import struct
-def build_poll_esf_raw():
+def build_esf_raw_poll():
     sync1, sync2 = 0xb5, 0x62
     cls, id = 0x10, 0x03
     length = 0

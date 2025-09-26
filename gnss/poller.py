@@ -2,10 +2,10 @@ import threading
 import time
 
 from builders import build_mon_sys_poll
-from builders import build_mon_comms_poll
-from builders import build_esf_status_poll
-from builders import build_poll_esf_raw
-from builders import build_gnq_gga_poll
+#from builders import build_mon_comms_poll
+#from builders import build_esf_status_poll
+#from builders import build_esf_raw_poll
+#from builders import build_gga_poll
 
 # Konfigurace polleru – přidej/ubírej podle potřeby
 POLL_TABLE = [
@@ -18,7 +18,7 @@ POLL_TABLE = [
 
 
 class RotatingPollerThread(threading.Thread):
-    def __init__(self, send_func, poll_table=POLL_TABLE, period=31.0):
+    def __init__(self, send_func, poll_table=POLL_TABLE, period=5.0):
         """
         send_func: funkce (bytes) → zápis na writer.send_ubx()
         poll_table: list of dicts, např.:

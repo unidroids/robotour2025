@@ -1,10 +1,13 @@
 import struct
 import time
+from collections import deque
 import threading
 import queue
 
+# --- Pomocné funkce mimo RT cesty (logování, dekódování) ---------------------
 
-def parse_nav_pvat_flags(flags):
+def parse_nav_pvat_flags(flags: int):
+    """Lehký parser flagů – používej mimo RT cesty (např. v logovacích metodách)."""
     return {
         "gnssFixOK":        bool(flags & (1 << 0)),
         "diffSoln":         bool(flags & (1 << 1)),
@@ -14,11 +17,49 @@ def parse_nav_pvat_flags(flags):
         "carrSoln":         (flags >> 6) & 0b11,  # 0: none, 1: float, 2: fix
     }
 
+def _carr_soln_str(carr_soln: int) -> str:
+    return ("none", "float", "fix", "reserved")[carr_soln & 0b11]
+
 
 class NavPvatHandler:
+    """
+    Time-critical handler pro UBX-NAV-PVAT (116 B, ~30 Hz).
+
+    Hot-path (handle):
+      - žádné printy
+      - žádné float převody
+      - minimální alokace
+      - 1 tuple na zprávu uložený do deque (ring buffer)
+
+    Tuple pořadí (pevné; raw škálování dle UBX):
+      (
+        iTOW, version, valid,
+        year, month, day, hour, minute, sec,
+        tAcc, nano, fixType, flags, flags2, numSV,
+        lon, lat, height, hMSL,
+        hAcc, vAcc,
+        velN, velE, velD, gSpeed, sAcc,
+        vehRoll, vehPitch, vehHeading, motHeading,
+        accRoll, accPitch, accHeading,
+        magDec, magAcc,
+        errEllipseOrient, errEllipseMajor, errEllipseMinor
+      )
+
+    Kde škálování (pro lidský výpis) je:
+      lon/lat: 1e-7 deg
+      height/hMSL: mm -> m ( /1000 )
+      hAcc/vAcc: mm -> m ( /1000 )
+      velN/velE/velD/gSpeed: mm/s -> m/s ( /1000 )
+      sAcc: mm/s -> m/s ( /1000 )
+      vehRoll/vehPitch/vehHeading/motHeading: 1e-5 deg
+      accRoll/accPitch/accHeading: 1e-2 deg
+      magDec: 1e-2 deg, magAcc: 1e-2 deg
+    """
+
     NAV_PVAT_PAYLOAD_LEN = 116
-    # Odpovídá přesně oficiální specifikaci, včetně reserved polí!
-    NAV_PVAT_STRUCT_FMT = (
+
+    # Připravený struct pro rychlost (unpack_from nealokuje nový buffer)
+    _S = struct.Struct(
         "<"   # Little-endian
         "I"   # iTOW
         "B"   # version
@@ -64,85 +105,170 @@ class NavPvatHandler:
         "4s"  # reserved3 (4B)
     )
 
-    def __init__(self, bin_stream_fifo=None, fifo_lock=None):
-        self.context = None
+    __slots__ = (
+        "count", "t0", "context", "_maxlen",
+        "bin_stream_fifo", "_fifo_lock", "dropped"
+    )
+
+    def __init__(self, bin_stream_fifo: "queue.Queue|None" = None,
+                 fifo_lock: "threading.Lock|None" = None,
+                 max_context: int = 256):
+        # RT metriky
+        self.count = 0
+        self.t0 = time.monotonic()
+
+        # Ring buffer posledních N zpráv
+        self._maxlen = max_context
+        self.context = deque(maxlen=max_context)
+
+        # (volitelně) binární stream pro tenký výstup (např. do TCP)
         self.bin_stream_fifo = bin_stream_fifo
         self._fifo_lock = fifo_lock or threading.Lock()
         self.dropped = 0
-        self.count = 0
-        self._last_print_sec = None
 
-    def handle(self, msg_class, msg_id, payload):
+    # --- HOT PATH -------------------------------------------------------------
+
+    def handle(self, msg_class: int, msg_id: int, payload: bytes) -> None:
+        """RT-safe: žádné printy, žádné floaty, minimum alokací."""
         if len(payload) != self.NAV_PVAT_PAYLOAD_LEN:
-            print("[NAV-PVAT] Wrong payload length:", len(payload))
             return
 
         self.count += 1
 
-        # Správné rozbalení payloadu dle specifikace
+        # Unpack bez mezialokací
         (
-            iTOW, version, valid, year, month, day, hour, minute, sec, reserved0, reserved1,
-            tAcc, nano, fixType, flags, flags2, numSV, lon, lat, height, hMSL, hAcc, vAcc,
-            velN, velE, velD, gSpeed, sAcc, vehRoll, vehPitch, vehHeading, motHeading,
-            accRoll, accPitch, accHeading, magDec, magAcc, errEllipseOrient, errEllipseMajor,
-            errEllipseMinor, reserved2, reserved3
-        ) = struct.unpack(self.NAV_PVAT_STRUCT_FMT, payload)
+            iTOW, version, valid, year, month, day, hour, minute, sec, _reserved0, _reserved1,
+            tAcc, nano, fixType, flags, flags2, numSV,
+            lon, lat, height, hMSL, hAcc, vAcc,
+            velN, velE, velD, gSpeed, sAcc,
+            vehRoll, vehPitch, vehHeading, motHeading,
+            accRoll, accPitch, accHeading,
+            magDec, magAcc,
+            errEllipseOrient, errEllipseMajor, errEllipseMinor,
+            _reserved2, _reserved3
+        ) = self._S.unpack_from(payload, 0)
 
-        flags_info = parse_nav_pvat_flags(flags)
-
-        ctx = dict(
-            iTOW=iTOW, year=year, month=month, day=day, hour=hour, minute=minute, sec=sec,
-            fixType=fixType, flags=flags_info, flags2=flags2, numSV=numSV,
-            lon=lon/1e7, lat=lat/1e7, height=height/1000, hMSL=hMSL/1000,
-            hAcc=hAcc/1000, vAcc=vAcc/1000,
-            gSpeed=gSpeed/1000, velN=velN/1000, velE=velE/1000, velD=velD/1000, sAcc=sAcc/1000,
-            roll=vehRoll/1e5, pitch=vehPitch/1e5, heading=vehHeading/1e5, motHeading=motHeading/1e5,
-            accRoll=accRoll/100, accPitch=accPitch/100, accHeading=accHeading/100,
-            magDec=magDec/100, magAcc=magAcc/100,
-            timestamp=time.time()
+        # 1 tuple = 1 zpráva
+        tup = (
+            iTOW, version, valid,
+            year, month, day, hour, minute, sec,
+            tAcc, nano, fixType, flags, flags2, numSV,
+            lon, lat, height, hMSL,
+            hAcc, vAcc,
+            velN, velE, velD, gSpeed, sAcc,
+            vehRoll, vehPitch, vehHeading, motHeading,
+            accRoll, accPitch, accHeading,
+            magDec, magAcc,
+            errEllipseOrient, errEllipseMajor, errEllipseMinor
         )
-        self.context = ctx
+        self.context.append(tup)
 
-        # Výpis pouze jednou za sekundu (dle GPS času)
-        sec_epoch = iTOW // 1000
-        if self._last_print_sec is None or sec_epoch != self._last_print_sec:
-            self._last_print_sec = sec_epoch
-
-            flags_msg = (
-                f"FixOK={flags_info['gnssFixOK']} "
-                f"DiffCorr={flags_info['diffSoln']} "
-                f"Roll={flags_info['vehRollValid']} "
-                f"Pitch={flags_info['vehPitchValid']} "
-                f"Heading={flags_info['vehHeadingValid']} "
-                f"CarrSoln={flags_info['carrSoln']} ({['none','float','fix','reserved'][flags_info['carrSoln']]})"
-            )
-
-            print(
-                f"[NAV-PVAT] {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{sec:02} "
-                f"fix={fixType} SV={numSV} ({flags_msg}) "
-                f"lat={lat/1e7:.7f} lon={lon/1e7:.7f} hEll={height/1000:.2f}m hMSL={hMSL/1000:.2f}m "
-                f"gSpd={gSpeed/1000:.3f}m/s vN={velN/1000:.3f} vE={velE/1000:.3f} vD={velD/1000:.3f} sAcc={sAcc/1000:.3f}m/s "
-                f"roll={vehRoll/1e5:.2f}°({accRoll/100:.2f}) pitch={vehPitch/1e5:.2f}°({accPitch/100:.2f}) hdg={vehHeading/1e5:.2f}°({accHeading/100:.2f}) mot={motHeading/1e5:.2f}° "
-                f"hAcc={hAcc/1000:.3f}m vAcc={vAcc/1000:.3f}m "
-            )
-
-        # Možnost pushnout binární data do fronty (volitelně uprav)
+        # (Volitelné) – tenký binární push do FIFO bez floatů
         if self.bin_stream_fifo is not None:
-            with self._fifo_lock:
-                if self.bin_stream_fifo.full():
-                    try:
-                        self.bin_stream_fifo.get_nowait()
-                        self.dropped += 1
-                    except queue.Empty:
-                        pass
-                try:
-                    # Uprav strukturu podle svých potřeb (například jen základní info)
-                    data = struct.pack('<I i i i i B B',
-                        iTOW, lon, lat, height, gSpeed, fixType, numSV
-                    )
+            # Minimal pack: iTOW, lon, lat, height, gSpeed, fixType, numSV
+            try:
+                with self._fifo_lock:
+                    if hasattr(self.bin_stream_fifo, "full") and self.bin_stream_fifo.full():
+                        try:
+                            self.bin_stream_fifo.get_nowait()
+                            self.dropped += 1
+                        except queue.Empty:
+                            pass
+                    data = struct.pack("<I i i i i B B",
+                                       iTOW, lon, lat, height, gSpeed, fixType, numSV)
                     self.bin_stream_fifo.put_nowait(data)
-                except Exception:
-                    pass
+            except Exception:
+                # RT cesta: nepropagujeme výjimky, dropneme
+                pass
 
-    def get_last_context(self):
-        return self.context
+    # --- MIMO HOT PATH: metody pro logy/sumarizaci ---------------------------
+
+    def get_stats(self):
+        """Vrátí (count, elapsed_s, avg_rate_hz)."""
+        now = time.monotonic()
+        elapsed = now - self.t0
+        rate = (self.count / elapsed) if elapsed > 0 else 0.0
+        return self.count, elapsed, rate
+
+    def last_tuple(self):
+        """Poslední uložený tuple nebo None."""
+        return self.context[-1] if self.context else None
+
+    def snapshot_and_clear(self):
+        """Vezme aktuální obsah bufferu jako list a buffer vymaže."""
+        items = list(self.context)
+        self.context.clear()
+        return items
+
+    # --- Lidský výpis (dělej „mimo RT“ – např. 1×/s) -------------------------
+
+    def log_stats(self, print_fn=print):
+        count, elapsed, rate = self.get_stats()
+        print_fn(f"[NAV-PVAT] Count={count} Elapsed={elapsed:.1f}s AvgRate={rate:.1f} Hz")
+
+    def log_last_tuple(self, print_fn=print):
+        t = self.last_tuple()
+        if not t:
+            print_fn("[NAV-PVAT] (no data)")
+            return
+
+        (
+            iTOW, version, valid,
+            year, month, day, hour, minute, sec,
+            tAcc, nano, fixType, flags, flags2, numSV,
+            lon, lat, height, hMSL,
+            hAcc, vAcc,
+            velN, velE, velD, gSpeed, sAcc,
+            vehRoll, vehPitch, vehHeading, motHeading,
+            accRoll, accPitch, accHeading,
+            magDec, magAcc,
+            errEllipseOrient, errEllipseMajor, errEllipseMinor
+        ) = t
+
+        fi = parse_nav_pvat_flags(flags)
+
+        # Převody pro lidské čtení (mimo RT)
+        lon_deg = lon / 1e7
+        lat_deg = lat / 1e7
+        h_ell_m = height / 1000.0
+        h_msl_m = hMSL / 1000.0
+        hAcc_m = hAcc / 1000.0
+        vAcc_m = vAcc / 1000.0
+        vN_ms = velN / 1000.0
+        vE_ms = velE / 1000.0
+        vD_ms = velD / 1000.0
+        g_ms   = gSpeed / 1000.0
+        sAcc_ms = sAcc / 1000.0
+
+        roll_deg    = vehRoll / 1e5
+        pitch_deg   = vehPitch / 1e5
+        hdg_deg     = vehHeading / 1e5
+        mot_deg     = motHeading / 1e5
+
+        accRoll_deg    = accRoll / 100.0
+        accPitch_deg   = accPitch / 100.0
+        accHeading_deg = accHeading / 100.0
+
+        magDec_deg  = magDec / 100.0
+        magAcc_deg  = magAcc / 100.0
+
+        flags_msg = (
+            f"FixOK={fi['gnssFixOK']} "
+            f"DiffCorr={fi['diffSoln']} "
+            f"Roll={fi['vehRollValid']} "
+            f"Pitch={fi['vehPitchValid']} "
+            f"Heading={fi['vehHeadingValid']} "
+            f"CarrSoln={fi['carrSoln']} ({_carr_soln_str(fi['carrSoln'])})"
+        )
+
+        print_fn(
+            f"[NAV-PVAT] {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{sec:02} "
+            f"fix={fixType} SV={numSV} ({flags_msg}) "
+            f"lat={lat_deg:.7f} lon={lon_deg:.7f} hEll={h_ell_m:.2f}m hMSL={h_msl_m:.2f}m "
+            f"gSpd={g_ms:.3f}m/s vN={vN_ms:.3f} vE={vE_ms:.3f} vD={vD_ms:.3f} sAcc={sAcc_ms:.3f}m/s "
+            f"roll={roll_deg:.2f}°({accRoll_deg:.2f}) pitch={pitch_deg:.2f}°({accPitch_deg:.2f}) "
+            f"hdg={hdg_deg:.2f}°({accHeading_deg:.2f}) mot={mot_deg:.2f}° "
+            f"hAcc={hAcc_m:.3f}m vAcc={vAcc_m:.3f}m "
+            f"iTOW={iTOW} nano={nano} tAcc={tAcc} errEll[ori={errEllipseOrient}, maj={errEllipseMajor}, min={errEllipseMinor}]"
+        )
+
