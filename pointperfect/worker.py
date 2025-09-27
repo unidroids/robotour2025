@@ -165,6 +165,10 @@ class PointPerfectWorker:
         """
         try:
             body = gga_sentence.strip().split('*')[0]
+            if not body.startswith('$') or 'GGA' not in body:
+                return False
+            
+            body = body[1:]  # Odstraníme '$'
             parts = body.split(',')
             if len(parts) < 8:
                 return False
