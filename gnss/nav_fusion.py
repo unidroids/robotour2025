@@ -1,101 +1,108 @@
-# gnss/nav_fusion.py
 from __future__ import annotations
 import time
 import threading
-from dataclasses import dataclass
 from collections import deque
-from typing import Deque, Optional, Tuple, List
+from typing import Optional, Callable, Deque, List
 
-# Později použijeme tvoji LeverArmHeading pro reálný výpočet:
-# from .lever_arm_heading import LeverArmHeading
+from data.esf_raw_data import EsfRawData
+from data.nav_pvat_data import NavPvatData
+from data.nav_fusion_data import NavFusionData
 
-@dataclass
-class RawSample:
-    t_mono: float       # host monotonic time
-    gyro_z_dps: float   # deg/s
-    ax: float = 0.0
-    ay: float = 0.0
-    az: float = 0.0
+from gyro_smoother import GyroRateSmoother
+from lever_arm_heading import LeverArmHeading
 
-@dataclass
+
 class FusionResult:
-    t_mono: float
-    iTOW_ms: int
-    heading_deg: float      # dočasně placeholder (NaN)
-    speed_mps: float
-    quality: str            # "NO_DATA" | "OK" | "LOW_SPEED" | další do budoucna
+    def __init__(
+        self,
+        t_mono: float,
+        iTOW_ms: int,
+        heading_deg: float,
+        speed_mps: float,
+        quality: str,
+    ):
+        self.t_mono = t_mono
+        self.iTOW_ms = iTOW_ms
+        self.heading_deg = heading_deg
+        self.speed_mps = speed_mps
+        self.quality = quality
+
+    def __repr__(self):
+        return (
+            f"<FusionResult t={self.t_mono:.3f} iTOW={self.iTOW_ms} "
+            f"heading={self.heading_deg:.2f}° speed={self.speed_mps:.3f}m/s quality={self.quality}>"
+        )
+
+# --- Hlavní engine ----------------------------------------------------------
 
 class NavFusion:
     """
-    Minimální kostra „NavFusion“:
-      - ESF-RAW handler volá on_esf_raw(...)
-      - NAV-PVAT handler volá on_nav_pvat(...)
-      - wait_for_update() blokuje, než dorazí nová data (PVAT je „tick“)
-      - get_latest() vrací poslední výsledek
-
-    POZN.: Výpočet headingu zatím záměrně neděláme. Cílem je integrace a signály.
-           V dalším kroku napojíme LeverArmHeading a doplníme skutečnou numeriku.
+    Fúzní engine:
+      - on_esf_raw(EsfRawData): ukládá GyroZ přes smoother
+      - on_nav_pvat(NavPvatData): použije vyhlazený GyroZ, spočte heading (lever arm), uloží výsledky
     """
-    def __init__(self, raw_window_sec: float = 0.15, max_samples: int = 256):
-        self._raw_window = raw_window_sec
-        self._raw: Deque[RawSample] = deque(maxlen=max_samples)
-        self._raw_lock = threading.Lock()
 
-        self._latest: Optional[FusionResult] = None
+    def __init__(self):
+        self._gyro_smoother = GyroRateSmoother()
+        self._latest: Optional[NavFusionData] = None
         self._latest_lock = threading.Lock()
         self._cond = threading.Condition()
+        self._lever_arm = LeverArmHeading(r_x=30.0, r_y=3.0) 
 
-        # future: self._lah = LeverArmHeading(...)
+    # === Vstup z ESF-RAW handleru ============================================
 
-    # === Volají handlery =====================================================
+    def on_esf_raw(self, raw: EsfRawData) -> None:
+        self._gyro_smoother.update(raw.gyroZ)
 
-    def on_esf_raw(self, gyro_z_dps: float, ax: float, ay: float, az: float) -> None:
-        """Rychlý append do ring bufferu (110 Hz)."""
-        s = RawSample(time.monotonic(), gyro_z_dps, ax, ay, az)
-        with self._raw_lock:
-            self._raw.append(s)
+    # === Vstup z NAV-PVAT handleru ===========================================
 
-    def on_nav_pvat(self, iTOW_ms: int, gSpeed_mps: float) -> None:
-        """
-        „Tick“ na 30 Hz – zde později uděláme skutečný výpočet (lever-arm).
-        Prozatím jen:
-          - vybereme okno posledních RAW vzorků (kvůli budoucímu výpočtu),
-          - vytvoříme placeholder FusionResult a notifneme odběratele.
-        """
+    def on_nav_pvat(self, pvat: NavPvatData) -> None:
         now = time.monotonic()
+        smoothed_gyroZ = self._gyro_smoother.last
 
-        # připravené okno pro budoucí numeriku (aktuálně nevyužijeme)
-        cutoff = now - self._raw_window
-        with self._raw_lock:
-            _window: List[RawSample] = [s for s in self._raw if s.t_mono >= cutoff]
+        if pvat.fixType in (4, 5):  # dead reckoning
+            heading_deg = pvat.vehHeading
+            speed = pvat.gSpeed
+        elif self._lever_arm:
+            heading_deg, speed = self._lever_arm.theta_from_alpha_speed_deg(
+                alpha_deg=pvat.motHeading,
+                speed=pvat.gSpeed,
+                omega_deg=smoothed_gyroZ
+            )
+        else:
+            heading_deg = pvat.vehHeading
+            speed = pvat.gSpeed
 
-        # placeholder hodnoty
-        speed = max(0.0, float(gSpeed_mps))
-        quality = "OK" if speed > 0.05 else "LOW_SPEED"
-
-        res = FusionResult(
-            t_mono=now,
-            iTOW_ms=int(iTOW_ms),
-            heading_deg=float('nan'),  # skutečný výpočet doplníme příště
-            speed_mps=speed,
-            quality=quality,
+        # Zde nastav další pole podle dostupných dat
+        fusion_data = NavFusionData(
+            ts_mono=now,
+            lat=pvat.lat,
+            lon=pvat.lon,
+            hAcc=pvat.hAcc,
+            heading=heading_deg,
+            headingAcc=pvat.accHeading,
+            speed=speed,
+            sAcc=pvat.sAcc,
+            gyroZ=smoothed_gyroZ,
+            gyroZAcc=2.0,  # odhad chyby gyroZ
+            gnssFixOK=int(pvat.carrSoln in (2, 3)),  # fix s GNSS
+            drUsed=int(pvat.fixType in (4, 5)),  # dead reckoning
         )
-        self._publish(res)
+        self._publish(fusion_data)
 
     # === Odběratelské API ====================================================
 
-    def get_latest(self) -> Optional[FusionResult]:
+    def get_latest(self) -> Optional[NavFusionData]:
         with self._latest_lock:
             return self._latest
 
     def wait_for_update(self, timeout: Optional[float] = None) -> bool:
-        """Blokuje do notify_all nebo do timeoutu. True = přišel update, False = timeout."""
         with self._cond:
             return self._cond.wait(timeout=timeout)
 
     # === Interní =============================================================
 
-    def _publish(self, res: FusionResult) -> None:
+    def _publish(self, res: NavFusionData) -> None:
         with self._latest_lock:
             self._latest = res
         with self._cond:

@@ -49,29 +49,23 @@ class GnssService:
         if not self.running or not self._initialized:
             raise RuntimeError("[GNSS SERVICE] Service is not running. Call START first.")
 
+    # API pro získání poslední GGA věty
     def get_gga(self):
         self._ensure_running()
-        return self.nmea_gga_handler.get_last_gga()
+        return self.handlers['nmea_gga'].get_last_gga()
+
+    # API pro získání dat z NavFusion
+    def wait_for_update(self, timeout=None):
+        self._ensure_running()
+        return self.nav_fusion.wait_for_update(timeout=timeout)
 
     def get_data_json(self):
         self._ensure_running()
-        import json
-        res = self.nav_fusion.get_latest()
-        if not res:
-            return "{}"
-        obj = {
-            "iTOW": res.iTOW_ms,
-            "heading_deg": res.heading_deg,
-            "speed_mps": res.speed_mps,
-            "quality": res.quality,
-            "t_mono": res.t_mono,
-        }
-        return json.dumps(obj)
+        fusion_data = self.nav_fusion.get_latest()
+        return fusion_data.to_json()
 
-    def get_nav_fusion(self):
+    def get_data_binary(self):
         self._ensure_running()
-        return self.nav_fusion
+        fusion_data = self.nav_fusion.get_latest()
+        return fusion_data.to_bytes() 
 
-    def get_latest_data(self):
-        self._ensure_running()
-        return self.get_data_json()

@@ -22,10 +22,10 @@ class NavPvatHandler:
         "<I B B H B B B B B B 2s I i B B B B i i i i I I i i i i I i i i i H H H h H H I I 4s 4s"
     )
 
-    def __init__(self, on_pvat: Optional[Callable[[NavPvatData], None]] = None):
+    def __init__(self, on_data: Optional[Callable[[NavPvatData], None]] = None):
         self._lock = threading.Lock()
         self._last: Optional[NavPvatData] = None
-        self.on_pvat = on_pvat
+        self.on_data = on_data
 
     def handle(self, msg_class: int, msg_id: int, payload: bytes) -> None:
         if len(payload) != self.NAV_PVAT_PAYLOAD_LEN:
@@ -66,8 +66,8 @@ class NavPvatHandler:
         )
         with self._lock:
             self._last = data
-        if self.on_pvat:
-            self.on_pvat(data)
+        if self.on_data:
+            self.on_data(data)
 
     def get_last(self) -> Optional[NavPvatData]:
         with self._lock:

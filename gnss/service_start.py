@@ -1,5 +1,6 @@
 # service_start.py
 import threading
+from types import SimpleNamespace
 
 from gnss_serial import GnssSerialIO
 from ubx_dispatcher import UbxDispatcher
@@ -21,14 +22,18 @@ POLL_TABLE = [
     {"name": "MON-SYS",   "builder": build_mon_sys_poll},
 ]
 
+from nav_fusion import NavFusion
+
+
 def init_gnss_service():
     # === Nav Fusion ===
-    nav_fusion = NavFusion(raw_window_sec=0.15, max_samples=256)
+    nav_fusion = NavFusion()
+    #nav_fusion = NavFusion(raw_window_sec=0.15, max_samples=256)
 
     # === Handlery s vazbami na sdílené fronty/locky ===
-    nav_pvat_handler = NavPvatHandler()
+    nav_pvat_handler = NavPvatHandler(on_data=nav_fusion.on_nav_pvat)
+    esf_raw_handler = EsfRawHandler(on_data=nav_fusion.on_esf_raw)
     nmea_gga_handler = NmeaGgaHandler()
-    esf_raw_handler = EsfRawHandler()
     mon_sys_handler = MonSysHandler()
 
     # === GNSS + Dispatchery ===
@@ -53,7 +58,13 @@ def init_gnss_service():
         "gnss": gnss,
         "poller": poller,
         "ubx_dispatcher": ubx_dispatcher,
-        "nmea_dispatcher": nmea_dispatcher
+        "nmea_dispatcher": nmea_dispatcher,
+        "handlers": {
+            "nav_pvat": nav_pvat_handler,
+            "esf_raw": esf_raw_handler,
+            "nmea_gga": nmea_gga_handler,
+            "mon_sys": mon_sys_handler
+        },        
     }
 
 

@@ -68,10 +68,22 @@ def client_thread(sock, addr, service):
                     f.write(b"OK\n")
                 elif line == "GET_BINARY_STREAM":
                     if not ensure_gnss(f, service): continue
-                    f.write(b'STREAM_READY\n')
-                    f.flush()
-                    service.send_binary_stream(sock)
-                    break
+                    try:
+                        while True:
+                            if not service.wait_for_update(timeout=1.0):
+                                continue
+                            f.write(service.get_data_binary())
+                            f.flush()
+                            # Volitelně: přerušení na základě dalšího příkazu od klienta
+                            # Pokud chceš, aby klient mohl ukončit stream, můžeš zde číst další řádky:
+                            # break pokud přijde "STOP_STREAM" nebo socket zavřen
+                            # Příklad:
+                            # if f.peek(1):  # pokud je něco v bufferu od klienta
+                            #     cmd = f.readline().decode().strip()
+                            #     if cmd == "STOP_STREAM": break
+                    except Exception as e:
+                        print(f"[CLIENT STREAM ERROR] {e}")
+                    break  # ukonči po streamu
                 else:
                     f.write(b'ERR UNKNOWN COMMAND\n')
                 f.flush()

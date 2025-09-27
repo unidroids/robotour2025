@@ -21,14 +21,14 @@ class EsfRawHandler:
     - Vytváří EsfRawData (už s přeškálovanými hodnotami v SI).
     - Uchovává poslední instanci, volá callback (je-li zadán).
     """
-    __slots__ = ("count", "t0", "_lock", "_last", "on_raw")
+    __slots__ = ("count", "t0", "_lock", "_last", "on_data")
 
-    def __init__(self, on_raw: Optional[Callable[[EsfRawData], None]] = None):
+    def __init__(self, on_data: Optional[Callable[[EsfRawData], None]] = None):
         self.count = 0
         self.t0 = time.monotonic()
         self._lock = threading.Lock()
         self._last: Optional[EsfRawData] = None
-        self.on_raw = on_raw
+        self.on_data = on_data
 
     def handle(self, msg_class: int, msg_id: int, payload: bytes) -> None:
         """RT-safe: žádné printy, minimální alokace."""
@@ -82,8 +82,8 @@ class EsfRawHandler:
         )
         with self._lock:
             self._last = esf_raw
-        if self.on_raw:
-            self.on_raw(esf_raw)
+        if self.on_data:
+            self.on_data(esf_raw)
 
     def get_last(self) -> Optional[EsfRawData]:
         with self._lock:

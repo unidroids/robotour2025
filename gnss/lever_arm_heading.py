@@ -30,6 +30,23 @@ class LeverArmHeading:
     speed_eps: float = 1e-6
     omega_eps: float = 1e-6
 
+    def theta_from_alpha_speed_deg(
+        self,
+        alpha_deg: float,      # [°] kurz (směr) v_A
+        speed: float,          # [m/s] velikost v_A (||v_A||)
+        omega_deg: float,      # [°/s] yaw-rate, +CCW
+        allow_reverse: bool = False
+    ) -> Tuple[float, float]:
+        """
+        Wrapper: Zadává úhel ve stupních a úhlovou rychlost ve stupních za sekundu.
+        Vrací (theta_deg, v_center).
+        """
+        alpha_rad = math.radians(alpha_deg)
+        omega_rad = math.radians(omega_deg)
+        theta_rad, v_center = self.theta_from_alpha_speed(alpha_rad, speed, omega_rad, allow_reverse)
+        theta_deg = math.degrees(theta_rad)
+        return theta_deg, v_center    
+
     def theta_from_alpha_speed(
         self,
         alpha: float,      # [rad] kurz (směr) v_A
