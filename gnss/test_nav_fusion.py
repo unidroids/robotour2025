@@ -20,8 +20,9 @@ def main():
             fusion = NavFusionData.from_bytes(data)
             if fusion.gSpeed > 0.2:
                 break
-            
-        while True:
+        cnt=0    
+        while cnt<300:
+            cnt+=1
             data = f.read(NavFusionData.byte_size())
             if len(data) != NavFusionData.byte_size():
                 print(f"Chyba: načteno {len(data)} bajtů, očekáváno {NavFusionData.byte_size()}")
