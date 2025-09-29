@@ -55,9 +55,10 @@ class NavFusionData:
     vehHeading: float
     motHeading: float
     lastGyroZ: float
+    gSpeed: float  
 
     # --- binární formát ---
-    _STRUCT_FMT: ClassVar[str] = "<B d d d f f f f f f f B B f f f"
+    _STRUCT_FMT: ClassVar[str] = "<B d d d f f f f f f f B B f f f f"
     _STRUCT: ClassVar[struct.Struct] = struct.Struct(_STRUCT_FMT)
 
     # --- API ---
@@ -80,6 +81,7 @@ class NavFusionData:
             float(self.vehHeading),
             float(self.motHeading),
             float(self.lastGyroZ),
+            float(self.gSpeed),
         )
 
     @classmethod
@@ -108,6 +110,7 @@ class NavFusionData:
             vehHeading=unpacked[13],
             motHeading=unpacked[14],
             lastGyroZ=unpacked[15],
+            gSpeed=unpacked[16],
         )
 
     @classmethod
@@ -133,6 +136,7 @@ class NavFusionData:
             "vehHeading": self.vehHeading,
             "motHeading": self.motHeading,
             "lastGyroZ": self.lastGyroZ,
+            "gSpeed": self.speed,  
         })
 
 
@@ -154,6 +158,7 @@ if __name__ == "__main__":
         vehHeading=90.0,
         motHeading=91.0,
         lastGyroZ=-12.0,
+        gSpeed=0.54,  
     )
     blob = state.to_bytes()
     print("Byte size:", len(blob), "expected:", NavFusionData.byte_size())
