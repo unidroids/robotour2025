@@ -37,10 +37,12 @@ class GnssService:
                 self.ubx_dispatcher.stop()
             if self.nmea_dispatcher:
                 self.nmea_dispatcher.stop()
+            self._initialized = False
             self.nmea_dispatcher = None
             self.ubx_dispatcher = None
             self.gnss = None
             self.poller = None
+            self.handlers = None
             self.running = False
             print("[SERVICE] STOPPED")
             return "OK"

@@ -47,12 +47,15 @@ class NavFusion:
         self._latest: Optional[NavFusionData] = None
         self._latest_lock = threading.Lock()
         self._cond = threading.Condition()
-        self._lever_arm = LeverArmHeading(r_x=30.0, r_y=3.0) 
+        self._lever_arm = LeverArmHeading(r_x=30.0, r_y=3.0)
+        self._last_gyroZ_value = 0.0 
 
     # === Vstup z ESF-RAW handleru ============================================
 
     def on_esf_raw(self, raw: EsfRawData) -> None:
+        self._last_gyroZ_value = raw.gyroZ
         self._gyro_smoother.update(raw.gyroZ)
+
 
     # === Vstup z NAV-PVAT handleru ===========================================
 
@@ -87,6 +90,9 @@ class NavFusion:
             gyroZAcc=2.0,  # odhad chyby gyroZ
             gnssFixOK=int(pvat.carrSoln in (2, 3)),  # fix s GNSS
             drUsed=int(pvat.fixType in (4, 5)),  # dead reckoning
+            vehHeading=pvat.vehHeading,
+            motHeading=pvat.motHeading,
+            lastGyroZ=self._last_gyroZ_value,
         )
         self._publish(fusion_data)
 
