@@ -30,28 +30,49 @@ class LeverArmHeading:
     speed_eps: float = 1e-6
     omega_eps: float = 1e-6
 
+
+
     def theta_from_motHeading_deg(
         self,
-        motHeading_deg: float,   # [°] GNSS heading (0=N, 90=E)
-        speed: float,            # [m/s]
-        omega_deg: float,        # [°/s] yaw-rate, +CCW
-        allow_reverse: bool = False
-    ) -> Tuple[float, float]:
+        motHeading_deg: float,   # [°] GNSS azimut (0=N, +CW)
+        speed: float,            # [m/s] ||v_A||
+        omega_deg_cw: float,     # [°/s] gyroZ z tvého logu (pozitivní = CW)
+        allow_reverse: bool = False,
+    ) -> Tuple[float, float, float]:
         """
-        Wrapper: 
-        - Převádí GNSS motHeading (azimut, 0=N, 90=E, 180=S, 270=W) na ENU konvenci (0=E, 90=N).
-        - Výstup (theta) vždy v rozsahu 0–360° (jako vehHeading).
-        - Vrací (theta_deg_0_360, v_center).
+        - Konverze GNSS azimutu -> ENU (α)
+        - Konverze gyroZ (+CW) -> ω (+CCW)
+        - Výstup θ v [0..360) a pro snadné porovnání i θ převedené zpět na azimut (0=N,+CW)
+        - Vrací (theta_deg_0_360, v_center, theta_cwN_deg)
         """
-        # GNSS motHeading (azimut) na ENU konvenci (0=E, 90=N):
-        alpha_deg_enu = (90.0 - motHeading_deg) % 360.0
+        def bearing_cwN_to_heading_ccwE_deg(bearing_deg: float) -> float:
+            # 0=N, +CW  ->  0=E, +CCW
+            return (90.0 - (bearing_deg % 360.0)) % 360.0
+
+        def heading_ccwE_to_bearing_cwN_deg(theta_deg: float) -> float:
+            # 0=E, +CCW ->  0=N, +CW
+            return (90.0 - (theta_deg % 360.0)) % 360.0
+
+        def wrap180_deg(x: float) -> float:
+            y = (x + 180.0) % 360.0 - 180.0
+            return 180.0 if y == -180.0 else y        
+        # 1) motHeading (0=N,+CW) -> α v ENU (0=E,+CCW)
+        alpha_deg_enu = bearing_cwN_to_heading_ccwE_deg(motHeading_deg)
         alpha_rad = math.radians(alpha_deg_enu)
-        omega_rad = math.radians(omega_deg)
+
+        # 2) CW -> CCW (tvůj gyroZ je dle logu +CW)
+        omega_rad = math.radians(-omega_deg_cw)  # teď je ω +CCW
+
+        # 3) Výpočet θ
         theta_rad, v_center = self.theta_from_alpha_speed(alpha_rad, speed, omega_rad, allow_reverse)
-        theta_deg = math.degrees(theta_rad)
-        # Výstup pro logy/export:
-        theta_deg_0_360 = theta_deg % 360.0
-        return theta_deg_0_360, v_center
+        theta_deg = math.degrees(theta_rad)          # (-180,180]
+        theta_deg_0_360 = theta_deg % 360.0          # [0,360)
+
+        # 4) Pro „stejné jablko“ proti motHeadingu si udělej i azimut z θ:
+        theta_cwN_deg = heading_ccwE_to_bearing_cwN_deg(theta_deg_0_360)
+
+        return theta_cwN_deg, v_center
+
  
 
     def theta_from_alpha_speed(

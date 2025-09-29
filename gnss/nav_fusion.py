@@ -71,7 +71,7 @@ class NavFusion:
             heading_deg, speed = self._lever_arm.theta_from_motHeading_deg(
                 motHeading_deg=pvat.motHeading,
                 speed=pvat.gSpeed,
-                omega_deg=smoothed_gyroZ
+                omega_deg_cw=smoothed_gyroZ
             )
         else:
             heading_deg = pvat.vehHeading
