@@ -30,22 +30,29 @@ class LeverArmHeading:
     speed_eps: float = 1e-6
     omega_eps: float = 1e-6
 
-    def theta_from_alpha_speed_deg(
+    def theta_from_motHeading_deg(
         self,
-        alpha_deg: float,      # [°] kurz (směr) v_A
-        speed: float,          # [m/s] velikost v_A (||v_A||)
-        omega_deg: float,      # [°/s] yaw-rate, +CCW
+        motHeading_deg: float,   # [°] GNSS heading (0=N, 90=E)
+        speed: float,            # [m/s]
+        omega_deg: float,        # [°/s] yaw-rate, +CCW
         allow_reverse: bool = False
     ) -> Tuple[float, float]:
         """
-        Wrapper: Zadává úhel ve stupních a úhlovou rychlost ve stupních za sekundu.
-        Vrací (theta_deg, v_center).
+        Wrapper: 
+        - Převádí GNSS motHeading (azimut, 0=N, 90=E, 180=S, 270=W) na ENU konvenci (0=E, 90=N).
+        - Výstup (theta) vždy v rozsahu 0–360° (jako vehHeading).
+        - Vrací (theta_deg_0_360, v_center).
         """
-        alpha_rad = math.radians(alpha_deg)
+        # GNSS motHeading (azimut) na ENU konvenci (0=E, 90=N):
+        alpha_deg_enu = (90.0 - motHeading_deg) % 360.0
+        alpha_rad = math.radians(alpha_deg_enu)
         omega_rad = math.radians(omega_deg)
         theta_rad, v_center = self.theta_from_alpha_speed(alpha_rad, speed, omega_rad, allow_reverse)
         theta_deg = math.degrees(theta_rad)
-        return theta_deg, v_center    
+        # Výstup pro logy/export:
+        theta_deg_0_360 = theta_deg % 360.0
+        return theta_deg_0_360, v_center
+ 
 
     def theta_from_alpha_speed(
         self,

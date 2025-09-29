@@ -18,10 +18,10 @@ def main():
                 return
             
             fusion = NavFusionData.from_bytes(data)
-            if fusion.gSpeed > 0.2:
+            if fusion.gSpeed > 0.1:
                 break
         cnt=0    
-        while cnt<300:
+        while fusion.gSpeed > 0.05:
             cnt+=1
             data = f.read(NavFusionData.byte_size())
             if len(data) != NavFusionData.byte_size():

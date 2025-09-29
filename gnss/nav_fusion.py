@@ -47,7 +47,8 @@ class NavFusion:
         self._latest: Optional[NavFusionData] = None
         self._latest_lock = threading.Lock()
         self._cond = threading.Condition()
-        self._lever_arm = LeverArmHeading(r_x=0.3, r_y=0.03) # [m]
+        self._lever_arm = LeverArmHeading(r_x=0.3, r_y=0.03, speed_eps=0.03, omega_eps=0.3) # [m]
+        
         self._last_gyroZ_value = 0.0 
 
     # === Vstup z ESF-RAW handleru ============================================
@@ -67,8 +68,8 @@ class NavFusion:
             heading_deg = pvat.vehHeading
             speed = pvat.gSpeed
         elif self._lever_arm:
-            heading_deg, speed = self._lever_arm.theta_from_alpha_speed_deg(
-                alpha_deg=pvat.motHeading,
+            heading_deg, speed = self._lever_arm.theta_from_motHeading_deg(
+                motHeading_deg=pvat.motHeading,
                 speed=pvat.gSpeed,
                 omega_deg=smoothed_gyroZ
             )
