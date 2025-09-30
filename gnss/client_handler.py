@@ -14,6 +14,7 @@ def ensure_gnss(f, service):
     return True
 
 def client_thread(sock, addr, service):
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")
     try:

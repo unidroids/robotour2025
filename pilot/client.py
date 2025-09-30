@@ -1,5 +1,6 @@
 # client_handler.py
 import sys
+import traceback
 
 def ensure_running(f, pilot):
     if not pilot.running:
@@ -34,9 +35,25 @@ def client_thread(sock, addr, pilot):
                 # --- doména pilot ---
                 elif line.startswith("NAVIGATE"):
                     if not ensure_running(f, pilot): continue
-                    f.write(b'[SERVER] Navigation points recived.\n')
+                    try:
+                        parts = line.split()
+                        if len(parts) != 6:
+                            f.write(b'ERR: NAVIGATE expects 5 arguments\n')
+                            f.flush()
+                            continue
+                        # NAVIGATE <start lon> <start lat> <end lon> <end lat> <end radius>
+                        start_lat = float(parts[1])
+                        start_lon = float(parts[2])
+                        end_lat = float(parts[3])
+                        end_lon = float(parts[4])
+                        end_radius = float(parts[5])
+                        start = (start_lon, start_lat)
+                        goal = (end_lon, end_lat)
+                        pilot.navigate(start, goal, end_radius)
+                        f.write(b'[SERVER] Navigation points received.\n')
+                    except Exception as e:
+                        f.write(f"ERR: {e}\n".encode())
                     f.flush()
-                    #TODO implement
                 # --- default response ---
                 else:
                     f.write(b'ERR UNKNOWN COMMAND\n')

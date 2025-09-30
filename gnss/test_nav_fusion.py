@@ -8,6 +8,7 @@ def main():
     # Hlavička CSV
     print("ts_mono,hAcc,speed,gSpeed,sAcc,heading,vehHeading,motHeading,headingAcc,lastGyroZ,gyroZ,gyroZAcc,gnssFixOK,drUsed")
     with socket.create_connection((HOST, PORT)) as sock:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         f = sock.makefile("rwb", buffering=0)
         f.write(b"GET_BINARY_STREAM\n")
         f.flush()
