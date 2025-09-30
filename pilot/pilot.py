@@ -67,7 +67,7 @@ class Pilot:
                     drive.send_pwm(left_pwm, right_pwm) 
                 else:
                     drive.send_pwm(0, 0)  # Stop if no data
-                    sleep(1) # Wait before retrying
+                    time.sleep(1) # Wait before retrying
             except Exception as e:
                 drive.send_pwm(0, 0)  # Stop on error
                 print(f"[PILOT ERROR] {e}")
