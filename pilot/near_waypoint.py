@@ -37,7 +37,8 @@ def select_near_point(
     E_lat: float, E_lon: float,
     R_lat: float, R_lon: float,
     L_near_m: float,
-    eps_m: float = 1e-6,
+    #eps_m: float = 1e-6,
+    eps_m: float = 2e-3,
 ) -> NearPointResult:
     """
     Najde průsečík(y) PŘÍMKY S–E s kružnicí C(R, L_near) v ENU(R),

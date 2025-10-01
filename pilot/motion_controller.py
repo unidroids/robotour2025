@@ -40,11 +40,11 @@ class ControllerConfig:
     omega_max_dps: float = 90.0
 
     # PWM mapování
-    max_pwm: int = 255
-    deadband_pwm: int = 20  # 15–25 dle tvého base; hodnoty < deadband nemají účinek
+    max_pwm: int = 40
+    deadband_pwm: int = 15  # 15–25 dle tvého base; hodnoty < deadband nemají účinek
 
     # "Komfortní" řízení pro compute_for_near()
-    slow_down_dist_m: float = 5.0  # pod touto vzdáleností plynule snižuj v_cmd
+    slow_down_dist_m: float = 3.0  # pod touto vzdáleností plynule snižuj v_cmd
     k_heading_to_omega: float = 2.0  # [ (°/s) / ° ] převod chyby natočení -> ω
     v_scale: float = 0.6            # škálování v_cmd vůči v_max (0..1)
 

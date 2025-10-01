@@ -126,8 +126,8 @@ class Pilot:
                 v_max_debug_mps=0.5,   # ladění
                 v_max_normal_mps=1.5,  # ostrý
                 omega_max_dps=90.0,
-                max_pwm=255,
-                deadband_pwm=20,
+                max_pwm=40,
+                deadband_pwm=15,
                 slow_down_dist_m=5.0,
                 k_heading_to_omega=2.0,
                 v_scale=0.6,

@@ -184,7 +184,7 @@ def _point_workflow():
 
         # Po startu Skupiny 1 vyčkej, až GNSS bude přesný (hAcc < 500 mm)
         _safe_send_to_client("WAIT GNSS(hAcc<500mm)...\n")
-        if not _await_gnss_ok(threshold_mm=500.0, timeout_s=120.0, poll_s=0.5):
+        if not _await_gnss_ok(threshold_mm=50.0, timeout_s=120.0, poll_s=0.5):
             _safe_send_to_client("ERROR: GNSS not ready (hAcc >= 500mm) within timeout.\n")
             return  # předčasné ukončení workflow (cleanup proběhne ve finally)
 
@@ -197,7 +197,7 @@ def _point_workflow():
 
         # Rychlá validace obou: GNSS (pořád OK) + LIDAR (začne vracet DISTANCE)
         _safe_send_to_client("VALIDATE GNSS & LIDAR...\n")
-        gnss_still_ok = _await_gnss_ok(threshold_mm=500.0, timeout_s=5.0, poll_s=0.5)
+        gnss_still_ok = _await_gnss_ok(threshold_mm=50.0, timeout_s=5.0, poll_s=0.5)
         lidar_ok      = _await_lidar_ok(timeout_s=30.0, poll_s=0.2)
         if not (gnss_still_ok and lidar_ok):
             if not gnss_still_ok:
@@ -252,7 +252,23 @@ def _point_workflow():
 
             # e) Když je bezpečno a ještě jsme neposlali waypoint (nebo po brzde)
             if _safe_to_go(hacc_mm, dist_cm) and not waypoint_sent:
-                cmd = f"WAYPOINT {lat:.7f} {lon:.7f} {radius:.3f}"
+                # Získej aktuální GNSS pozici jako start
+                start_lat = None
+                start_lon = None
+                # Ověř, že hacc_mm je validní a načti aktuální GNSS pozici
+                resp = _send_and_report(PORT_GNSS, "DATA")
+                try:
+                    start_payload = json.loads(resp[resp.find("{"):resp.rfind("}")+1])
+                    start_lat = float(start_payload.get("lat", 0.0))
+                    start_lon = float(start_payload.get("lon", 0.0))
+                except Exception:
+                    _safe_send_to_client("ERROR: Nelze načíst aktuální GNSS pozici pro NAVIGATE.\n")
+                    continue
+
+                # Cíl z ini souboru
+                goal_lat, goal_lon, radius = _read_point_ini()
+
+                cmd = f"NAVIGATE {start_lat:.7f} {start_lon:.7f} {goal_lat:.7f} {goal_lon:.7f} {radius:.3f}"
                 _send_and_report(PORT_PILOT, cmd)
                 waypoint_sent = True
                 brake_phase = False
