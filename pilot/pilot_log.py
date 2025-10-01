@@ -4,16 +4,6 @@ import os, csv, json, time, datetime
 from typing import Optional
 
 class PilotLog:
-    """
-    CSV logger pro službu PILOT – jeden soubor na jeden běh.
-    Sloupce (oddělovač ';'):
-      ts_iso; t_mono; typ; state; fsm_state; loop_dt_ms;
-      lat; lon; alt_m; theta_deg; speed_mps; omega_dps; hAcc_m; headingAcc_deg; gnssFixOK; drUsed;
-      goal_lat; goal_lon; goal_radius_m; dist_to_goal_m; bearing_to_goal_deg; heading_error_deg;
-      near_name; near_s; near_case;
-      lookahead_m; k_heading; k_cte; v_cmd_mps; omega_cmd_dps; v_limit_mps; omega_limit_dps; sat_v; sat_omega;
-      left_pwm; right_pwm; omega_setpoint_dps; note
-    """
     def __init__(self, start_lat: float, start_lon: float,
                  goal_lat: float, goal_lon: float, goal_radius: float,
                  ctrl_config: object, ctrl_mode: str,
@@ -25,7 +15,6 @@ class PilotLog:
         self._f = open(self.path, "w", encoding="utf-8", newline='', buffering=1)
         self._w = csv.writer(self._f, delimiter=';')
         self._write_header()
-
         meta = {
             "start_lat": float(start_lat), "start_lon": float(start_lon),
             "goal_lat": float(goal_lat), "goal_lon": float(goal_lon),
@@ -43,7 +32,6 @@ class PilotLog:
             pass
 
     def _now_iso(self) -> str:
-        # Lokální čas Praha (+02:00, resp. dle timezone systému)
         return datetime.datetime.now().isoformat(timespec="milliseconds")
 
     def _write_header(self) -> None:
@@ -73,8 +61,6 @@ class PilotLog:
             get("left_pwm"), get("right_pwm"), get("omega_setpoint_dps"),
             get("note"),
         ])
-
-    # ----------------- veřejné metody -----------------
 
     def event(self, state: str, fsm_state: str, note: str) -> None:
         self._write_row("EVENT", state=state, fsm_state=fsm_state, note=note)
