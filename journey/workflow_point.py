@@ -197,8 +197,8 @@ def _point_workflow():
 
         # Rychlá validace obou: GNSS (pořád OK) + LIDAR (začne vracet DISTANCE)
         _safe_send_to_client("VALIDATE GNSS & LIDAR...\n")
-        gnss_still_ok = _await_gnss_ok(threshold_mm=50.0, timeout_s=5.0, poll_s=0.5)
-        lidar_ok      = _await_lidar_ok(timeout_s=30.0, poll_s=0.2)
+        gnss_still_ok = _await_gnss_ok(threshold_mm=50.0, timeout_s=60.0, poll_s=1.0)
+        lidar_ok      = _await_lidar_ok(timeout_s=60.0, poll_s=1.0)
         if not (gnss_still_ok and lidar_ok):
             if not gnss_still_ok:
                 _safe_send_to_client("ERROR: GNSS lost accuracy during validation.\n")

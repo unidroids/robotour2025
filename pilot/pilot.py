@@ -14,11 +14,9 @@ from data.nav_fusion_data import NavFusionData
 from geo_utils import heading_gnss_to_enu, lla_to_ecef, ecef_to_enu
 from near_waypoint import select_near_point
 from motion_controller import MotionController2D, ControllerConfig, SpeedMode
-from pilot_log import PilotLog  # <-- NOVÉ
 
-def _wrap_deg(angle: float) -> float:
-    a = (angle + 180.0) % 360.0 - 180.0
-    return a if a != -180.0 else 180.0
+from pilot_log import PilotLog
+from pilot_fsm import NavigatorFSM, FsmConfig, NavQuality, NavigatorState
 
 @dataclass
 class PilotState:
@@ -34,6 +32,8 @@ class PilotState:
 
 class Pilot:
 
+    VERSION = "1.1.0"
+
     def __init__(self):
         self.running = False
         self._initialized = False
@@ -43,16 +43,11 @@ class Pilot:
 
         self.gnss_client: Optional[GnssClient] = None
         self.drive_client: Optional[DriveClient] = None
-
-        # cíle v pořadí, jak přicházejí z klienta: (lon, lat)
-        self.target: Optional[Tuple[Tuple[float, float], Tuple[float, float], float]] = None  # (start, goal, radius)
+        self._log: Optional[PilotLog] = None
 
         # stav publikovaný přes STATE
         self._state_lock = threading.Lock()
         self._state = PilotState()
-
-        # logger (živý jen v době běhu navigace)
-        self.log: Optional[PilotLog] = None
 
     # ---------------------- stavové API ----------------------
 
@@ -102,6 +97,10 @@ class Pilot:
                 self.gnss_client = None
                 self._initialized = False
                 self.running = False
+                if self._log:
+                    self._log.event("IDLE", "IDLE", "Service stopped")
+                    self._log.close()
+                    self._log = None
                 self._set_state(mode="IDLE", near_case="N/A", left_pwm=0, right_pwm=0, last_note="SERVICE STOPPED")
                 print("[SERVICE] STOPPED")
             return "OK"
@@ -110,69 +109,99 @@ class Pilot:
         if not self.running or not self._initialized:
             raise RuntimeError("[PILOT SERVICE] Service is not running. Call START first.")
 
+    # ---------------------- util -----------------------------
+
+    @staticmethod
+    def _wrap_angle_deg(a: float) -> float:
+        """wrap to [-180,180)"""
+        a = (a + 180.0) % 360.0 - 180.0
+        return a
+
     # ---------------------- navigační vlákno -----------------
 
     def _navigate_thread(self, gnss: GnssClient, drive: DriveClient, start_lat, start_lon, goal_lat, goal_lon, goal_radius,):
         """
-        Baseline navigační smyčka:
-        - čte GNSS NavFusionData
-        - vybere near point na PŘÍMCE S–E s L_near = 1.0 m
-        - spočítá PWM z (heading_enu, near v ENU(R)) s limity (v_max, ω_max)
-        - loguje průběh (GNSS_IN, COMPUTE, ACT_CMD, EVENT) do jednoho CSV
+        Navigační smyčka:
+        - čte GNSS NavFusionData (30 Hz)
+        - vybere near point na přímce S–E s L_near
+        - rozhoduje PWM přes MotionController
+        - loguje do CSV (jeden soubor na běh)
+        - používá NavigatorFSM pro řízení režimů (WAIT_GNSS/ACQUIRE_HEADING/...)
         """
-        # POZOR: start, goal dorazily z klienta jako (lon, lat)!
-        # Pro výpočty potřebujeme (lat, lon):
+        # Parametry (pozor: klient posílá (lat,lon) – zde to respektujeme)
         S_lat, S_lon = float(start_lat), float(start_lon)
         E_lat, E_lon = float(goal_lat), float(goal_lon)
+        GOAL_RADIUS = float(goal_radius)
 
-        print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) to (lat={E_lat}, lon={E_lon}) "
-              f"within radius {goal_radius}m")
+        print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) "
+              f"to (lat={E_lat}, lon={E_lon}) within radius {GOAL_RADIUS}m")
 
-        # --- Konfigurace controlleru ---
+        # --- Controller config (mírně zklidněné) ---
         ctrl = MotionController2D(
             ControllerConfig(
-                v_max_debug_mps=0.5,   # ladění
-                v_max_normal_mps=1.5,  # ostrý
+                v_max_debug_mps=0.5,
+                v_max_normal_mps=1.5,
                 omega_max_dps=90.0,
                 max_pwm=40,
                 deadband_pwm=15,
                 slow_down_dist_m=5.0,
-                k_heading_to_omega=2.0,
+                k_heading_to_omega=0.9,   # z 2.0 -> 0.9 (mírnější yaw)
                 v_scale=0.6,
             ),
-            mode=SpeedMode.DEBUG  # přepni na NORMAL po odladění
+            mode=SpeedMode.DEBUG
         )
-        L_NEAR = 1.0  # [m] délka "provázku"
-        GOAL_RADIUS = float(goal_radius)
+        # „provázek“ (lookahead) – pro zklidnění ↑
+        L_NEAR = 2.0
 
-        # --- Log init (RUN_META) ---
-        self.log = PilotLog(
-            start_lat=S_lat, start_lon=S_lon,
-            goal_lat=E_lat, goal_lon=E_lon, goal_radius=GOAL_RADIUS,
-            ctrl=ctrl,
-            lookahead_m=L_NEAR,
-        )
+        # --- FSM ---
+        fsm = NavigatorFSM(FsmConfig(
+            hacc_ready_m=1.5,
+            acquire_heading_acc_max_deg=40.0,    # tvé „dokud přesnost není < 40°“
+            acquire_heading_window_deg=15.0,     # natočit k near do ±15°
+            heading_uncertain_deg=20.0,          # při jízdě – pokud >, jdi do SAFE_SPIN
+            t_stable_s=0.7,
+            t_hold_s=0.3,
+            v_max_mps=0.5,
+            omega_max_dps=90.0,
+            omega_acquire_gain=2.0,
+        ))
 
-        self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation loop started")
-        self.log.event("NAVIGATE", "Navigation loop started")
-
+        # --- Log ---
+        self._log = PilotLog(S_lat, S_lon, E_lat, E_lon, GOAL_RADIUS, ctrl.config, str(ctrl.mode), version=self.VERSION)
+        state = "NAVIGATE"
         last_loop = time.monotonic()
+        self._log.event(state, fsm.state.name, "Navigation loop started")
+        self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation loop started")
+
+        prev_fsm_state = fsm.state
 
         while not self._stop_event.is_set():
             loop_start = time.monotonic()
             try:
                 nav: Optional[NavFusionData] = gnss.read_nav_fusion_data()
                 loop_dt_ms = (loop_start - last_loop) * 1000.0
+                dt_s = max((loop_start - last_loop), 1e-3)
                 last_loop = loop_start
 
                 if not nav:
                     drive.send_pwm(0, 0)
-                    self._set_state(left_pwm=0, right_pwm=0, last_note="No nav data")
-                    self.log.event("NAVIGATE", "No nav data")
+                    self._log.event(state, fsm.state.name, "No nav data")
                     time.sleep(0.2)
                     continue
 
-                # --- Near dle specifikace (line S–E ∩ circle R(L_NEAR)) ---
+                # --- Extract heading ENU ---
+                heading_gnss = getattr(nav, "heading", None)
+                if heading_gnss is None:
+                    heading_gnss = getattr(nav, "motHeading", None)
+                if heading_gnss is None:
+                    heading_gnss = getattr(nav, "vehHeading", None)
+                theta_enu = heading_gnss_to_enu(float(heading_gnss or 0.0))
+
+                # --- vzdálenost k cíli v ENU(R) ---
+                Ex, Ey, _ = ecef_to_enu(*lla_to_ecef(E_lat, E_lon), nav.lat, nav.lon, 0.0)
+                dist_to_goal_m = math.hypot(Ex, Ey)
+
+                # --- near point ---
                 near = select_near_point(
                     S_lat=S_lat, S_lon=S_lon,
                     E_lat=E_lat, E_lon=E_lon,
@@ -180,84 +209,63 @@ class Pilot:
                     L_near_m=L_NEAR,
                 )
 
-                # --- Heading (GNSS -> ENU) ---
-                heading_gnss = getattr(nav, "heading", None)
-                if heading_gnss is None:
-                    heading_gnss = getattr(nav, "motHeading", None)
-                if heading_gnss is None:
-                    heading_gnss = getattr(nav, "vehHeading", None)
-                heading_enu = heading_gnss_to_enu(float(heading_gnss or 0.0))
+                # Bearing v ENU: 0=E,90=N
+                bearing_to_goal_deg = (math.degrees(math.atan2(Ey, Ex)) + 360.0) % 360.0
+                heading_error_deg = self._wrap_angle_deg(bearing_to_goal_deg - theta_enu)
 
-                # --- GNSS_IN log ---
-                self.log.nav(
-                    state="NAVIGATE",
-                    loop_dt_ms=loop_dt_ms,
-                    nav=nav,
-                    theta_enu=heading_enu
+                # Bearing na NEAR z (0,0)->(near_x,near_y)
+                bearing_to_near_deg = (math.degrees(math.atan2(near.near_y_m or 0.0, near.near_x_m or 0.0)) + 360.0) % 360.0
+                heading_err_to_near_deg = self._wrap_angle_deg(bearing_to_near_deg - theta_enu)
+
+                # --- FSM krok ---
+                quality = NavQuality(has_fix=bool(nav.gnssFixOK), hacc_m=float(nav.hAcc), heading_acc_deg=float(nav.headingAcc))
+                action = fsm.step(
+                    dt_s=dt_s,
+                    quality=quality,
+                    dist_to_goal_m=dist_to_goal_m,
+                    goal_radius_m=GOAL_RADIUS,
+                    near_case=near.case,
+                    heading_err_to_near_deg=heading_err_to_near_deg,
                 )
 
-                # --- Vzdálenost k cíli a diagnostika (COMPUTE) ---
-                diag = self.log.near_and_errors(
-                    state="NAVIGATE",
-                    goal_lat=E_lat, goal_lon=E_lon, goal_radius_m=GOAL_RADIUS,
-                    R_lat=nav.lat, R_lon=nav.lon,
-                    theta_enu=heading_enu,
-                    near=near
-                )
-                dist_to_goal_m = diag["dist_to_goal_m"]
+                # Log přechodu stavu FSM
+                if action.state != prev_fsm_state:
+                    self._log.event(state, action.state.name, f"FSM: {prev_fsm_state.name} -> {action.state.name}")
+                    prev_fsm_state = action.state
+
+                # --- GNSS log ---
+                self._log.nav(state, action.state.name, loop_dt_ms,
+                              lat=nav.lat, lon=nav.lon, alt_m=nav.alt,
+                              theta_deg=theta_enu, speed_mps=nav.speed, omega_dps=nav.gyroZ,
+                              hAcc_m=nav.hAcc, headingAcc_deg=nav.headingAcc,
+                              gnssFixOK=nav.gnssFixOK, drUsed=nav.drUsed)
+
+                # --- COMPUTE log ---
+                self._log.compute(state, action.state.name,
+                                  goal_lat=E_lat, goal_lon=E_lon, goal_radius_m=GOAL_RADIUS,
+                                  dist_to_goal_m=dist_to_goal_m,
+                                  bearing_to_goal_deg=bearing_to_goal_deg,
+                                  heading_error_deg=heading_error_deg,
+                                  near_name=getattr(near,'name',""), near_s=getattr(near,'s',""),
+                                  near_case=near.case,
+                                  note=f"err_to_near={heading_err_to_near_deg:.1f}")
 
                 if near.case == "NO_INTERSECTION":
-                    # Eskalace nahoru: zastav a publikuj stav
                     drive.send_pwm(0, 0)
-                    self._set_state(
-                        mode="GOAL_NOT_REACHED",
-                        near_case=near.case,
-                        dist_to_goal_m=dist_to_goal_m,
-                        cross_track_m=getattr(near, "d_perp_m", 0.0),
-                        left_pwm=0, right_pwm=0,
-                        heading_enu_deg=heading_enu,
-                        last_note="Near selection failed (NO_INTERSECTION)"
-                    )
-                    self.log.event("GOAL_NOT_REACHED", "Near selection failed (NO_INTERSECTION)")
-                    print("[PILOT] Near selection failed (NO_INTERSECTION) -> GOAL_NOT_REACHED")
-                    #time.sleep(0.2)
-                    #continue
-                    break  # ukonči navigaci
+                    self._set_state(mode="GOAL_NOT_REACHED", near_case=near.case,
+                                    dist_to_goal_m=dist_to_goal_m, cross_track_m=near.d_perp_m,
+                                    left_pwm=0, right_pwm=0, heading_enu_deg=theta_enu,
+                                    last_note="Near selection failed (NO_INTERSECTION)")
+                    time.sleep(0.2)
+                    continue
 
-                # --- Povolení dopředně/spin (zatím bez FSM: obojí povoleno) ---
-                allow_forward = True
-                allow_spin = True
+                # --- Gating z FSM ---
+                allow_forward = action.allow_forward
+                allow_spin = action.allow_spin
 
-                # --- PŘEDPOČET řídicích veličin pro log (stejně jako v controlleru) ---
-                # Desired ENU úhel k near
-                desired_deg = math.degrees(math.atan2(near.near_y_m or 0.0, near.near_x_m or 0.0))
-                err_deg = _wrap_deg(desired_deg - heading_enu)
-                # ω
-                k_heading = getattr(ctrl.cfg, "k_heading_to_omega", 2.0)
-                omega_cmd = k_heading * err_deg
-                omega_limit = getattr(ctrl.cfg, "omega_max_dps", 90.0)
-                if not allow_spin:
-                    omega_cmd = 0.0
-                else:
-                    omega_cmd = max(-omega_limit, min(omega_limit, omega_cmd))
-                # v (plynulé zpomalení)
-                slow_down_dist = getattr(ctrl.cfg, "slow_down_dist_m", 5.0)
-                v_scale = getattr(ctrl.cfg, "v_scale", 0.6)
-                v_limit = ctrl.cfg.v_max_debug_mps if ctrl.mode == SpeedMode.DEBUG else ctrl.cfg.v_max_normal_mps
-                if not allow_forward:
-                    v_cmd = 0.0
-                else:
-                    if dist_to_goal_m <= GOAL_RADIUS:
-                        v_cmd = 0.0
-                    else:
-                        if dist_to_goal_m < slow_down_dist:
-                            v_cmd = v_scale * (dist_to_goal_m / slow_down_dist) * v_limit
-                        else:
-                            v_cmd = v_scale * v_limit
-
-                # --- Výpočet PWM ---
+                # --- Motion controller ---
                 left_pwm, right_pwm, status = ctrl.compute_for_near(
-                    heading_enu_deg=heading_enu,
+                    heading_enu_deg=theta_enu,
                     near_x_m=near.near_x_m or 0.0,
                     near_y_m=near.near_y_m or 0.0,
                     allow_forward=allow_forward,
@@ -266,71 +274,59 @@ class Pilot:
                     goal_radius_m=GOAL_RADIUS,
                 )
 
-                # SATURACE (pouze odhad dle limitů)
-                sat_v = int(abs(v_cmd) >= v_limit - 1e-6)
-                sat_omega = int(abs(omega_cmd) >= omega_limit - 1e-6)
+                # Výstupní info pro log – limity/saturace (pokud controller nastavuje)
+                v_cmd = getattr(ctrl, "last_v_cmd", 0.0)
+                omega_cmd = getattr(ctrl, "last_omega_cmd", 0.0)
+                v_limit = getattr(ctrl, "v_max", 0.0)
+                omega_limit = getattr(ctrl, "omega_max", 0.0)
+                sat_v = abs(v_cmd) >= (v_limit - 1e-3) if v_limit else 0
+                sat_omega = abs(omega_cmd) >= (omega_limit - 1e-3) if omega_limit else 0
 
-                # --- Log aktuátorů ---
-                self.log.act_cmd(
-                    state="NAVIGATE",
-                    lookahead_m=L_NEAR,
-                    k_heading=k_heading,
-                    k_cte=None,
-                    v_cmd_mps=v_cmd,
-                    omega_cmd_dps=omega_cmd,
-                    v_limit_mps=v_limit,
-                    omega_limit_dps=omega_limit,
-                    left_pwm=left_pwm, right_pwm=right_pwm,
-                    sat_v=sat_v, sat_omega=sat_omega,
-                    note=status
-                )
+                # --- ACT_CMD log ---
+                self._log.act_cmd(state, action.state.name,
+                                  lookahead_m=L_NEAR,
+                                  k_heading=getattr(ctrl, "k_heading_to_omega", ""),
+                                  k_cte=getattr(ctrl, "k_cte", ""),
+                                  v_cmd_mps=f"{v_cmd:.3f}",
+                                  omega_cmd_dps=f"{omega_cmd:.2f}",
+                                  v_limit_mps=f"{v_limit:.2f}",
+                                  omega_limit_dps=f"{omega_limit:.2f}",
+                                  sat_v=sat_v, sat_omega=sat_omega,
+                                  left_pwm=left_pwm, right_pwm=right_pwm,
+                                  omega_setpoint_dps=f"{action.omega_setpoint_dps:.1f}",
+                                  note=status)
 
-                # Publikuj stav
-                self._set_state(
-                    mode="NAVIGATE",
-                    near_case=near.case,
-                    dist_to_goal_m=dist_to_goal_m,
-                    cross_track_m=getattr(near, "d_perp_m", 0.0),
-                    left_pwm=left_pwm, right_pwm=right_pwm,
-                    heading_enu_deg=heading_enu,
-                    last_note=status
-                )
-
-                # Debug log
-                print(f"[PILOT] near={near.case} cte={getattr(near,'d_perp_m',0.0):.3f}m "
+                # Publikace stavu + PWM
+                self._set_state(mode="NAVIGATE", near_case=near.case, dist_to_goal_m=dist_to_goal_m,
+                                cross_track_m=near.d_perp_m, left_pwm=left_pwm, right_pwm=right_pwm,
+                                heading_enu_deg=theta_enu, last_note=f"{status} | FSM={action.state.name}")
+                print(f"[PILOT] fsm={action.state.name} near={near.case} cte={near.d_perp_m:.3f}m "
                       f"goal_remain={dist_to_goal_m:.2f}m {status}")
 
-                # Odeslání na kola
                 drive.send_pwm(left_pwm, right_pwm)
 
-                # --- Dosažen cíl? ---
+                # --- Cíl? ---
                 if dist_to_goal_m <= GOAL_RADIUS:
                     print("[PILOT] Goal reached -> stop")
                     drive.send_pwm(0, 0)
+                    self._log.event("GOAL_REACHED", action.state.name, "Goal reached")
                     self._set_state(mode="GOAL_REACHED", last_note="Goal reached")
-                    self.log.event("GOAL_REACHED", "Goal reached")
                     break
 
             except Exception as e:
                 drive.send_pwm(0, 0)
-                self._set_state(mode="NAVIGATE", left_pwm=0, right_pwm=0, last_note=f"ERROR: {e}")
+                if self._log:
+                    self._log.event("NAVIGATE", prev_fsm_state.name, f"ERROR: {e}")
                 print(f"[PILOT ERROR] {e}")
                 traceback.print_exc()
-                try:
-                    if self.log:
-                        self.log.event("NAVIGATE", f"ERROR: {e}")
-                except Exception:
-                    pass
                 time.sleep(1.0)
 
-        # konec smyčky
+        # Konec smyčky
         self._set_state(left_pwm=0, right_pwm=0)
-        try:
-            if self.log:
-                self.log.event("STOPPED", "Navigation ended")
-                self.log.close()
-        finally:
-            self.log = None
+        if self._log:
+            self._log.event("STOPPED", prev_fsm_state.name, "Navigation ended")
+            self._log.close()
+            self._log = None
 
     # ---------------------- API pro řízení -------------------
 
