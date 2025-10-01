@@ -235,8 +235,11 @@ def _point_workflow():
                     if st != last_status:
                         _safe_send_to_client(f"PILOT STATUS: {st}\n")
                         last_status = st
-                    if st == "REACHED":
+                    if st == "GOAL_REACHED":
                         log_event("POINT workflow: REACHED – končím.")
+                        break
+                    elif st == "GOAL_NOT_REACHED":
+                        log_event("POINT workflow: GOAL_NOT_REACHED – končím.")
                         break
                 except Exception:
                     pass

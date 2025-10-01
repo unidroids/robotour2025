@@ -45,6 +45,11 @@ def client_thread(sock, addr, pilot):
                 elif line == "STATE":
                     _handle_STATE(f, pilot)
 
+                elif line == "STATUS":
+                    state = pilot.get_state()
+                    mode = state.get("mode", "UNKNOWN")
+                    f.write((mode+'\n').encode('utf-8'))
+
                 elif line == "EXIT":
                     f.write(b'GNSS-BYE\n')
                     f.flush()
@@ -58,21 +63,20 @@ def client_thread(sock, addr, pilot):
                     try:
                         parts = line.split()
                         if len(parts) != 6:
-                            f.write(b'ERR: NAVIGATE expects 5 arguments: <start_lon> <start_lat> <end_lon> <end_lat> <end_radius>\n')
+                            f.write(b'ERR: NAVIGATE expects 5 arguments: <start_lat> <start_lon> <goal_lat> <goal_lon> <goal_radius>\n')
                             f.flush()
                             continue
-                        start_lon = float(parts[1])
-                        start_lat = float(parts[2])
-                        end_lon = float(parts[3])
-                        end_lat = float(parts[4])
-                        end_radius = float(parts[5])
+                        start_lat = float(parts[1])
+                        start_lon = float(parts[2])
+                        goal_lat = float(parts[3])
+                        goal_lon = float(parts[4])
+                        goal_radius = float(parts[5])
                         # Pilot očekává (lon, lat); výpočty si uvnitř přemapují na (lat, lon)
-                        start = (start_lon, start_lat)
-                        goal = (end_lon, end_lat)
-                        pilot.navigate(start, goal, end_radius)
+                        pilot.navigate(start_lat, start_lon, goal_lat, goal_lon, goal_radius)
                         f.write(b'OK NAVIGATE\n')
                     except Exception as e:
                         f.write(f"ERR: {e}\n".encode())
+                        traceback.print_exc()
                     f.flush()
 
                 # --- default response ---

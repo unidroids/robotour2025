@@ -105,7 +105,7 @@ class Pilot:
 
     # ---------------------- navigační vlákno -----------------
 
-    def _navigate_thread(self, gnss: GnssClient, drive: DriveClient, start, goal, radius):
+    def _navigate_thread(self, gnss: GnssClient, drive: DriveClient, start_lat, start_lon, goal_lat, goal_lon, goal_radius,):
         """
         Baseline navigační smyčka:
         - čte GNSS NavFusionData
@@ -114,11 +114,11 @@ class Pilot:
         """
         # POZOR: start, goal dorazily z klienta jako (lon, lat)!
         # Pro výpočty potřebujeme (lat, lon):
-        S_lat, S_lon = float(start[1]), float(start[0])
-        E_lat, E_lon = float(goal[1]), float(goal[0])
+        S_lat, S_lon = float(start_lat), float(start_lon)
+        E_lat, E_lon = float(goal_lat), float(goal_lon)
 
         print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) to (lat={E_lat}, lon={E_lon}) "
-              f"within radius {radius}m")
+              f"within radius {goal_radius}m")
 
         # --- Konfigurace controlleru ---
         ctrl = MotionController2D(
@@ -135,7 +135,7 @@ class Pilot:
             mode=SpeedMode.DEBUG  # přepni na NORMAL po odladění
         )
         L_NEAR = 1.0  # [m] délka "provázku"
-        GOAL_RADIUS = float(radius)
+        GOAL_RADIUS = float(goal_radius)
 
         self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation loop started")
 
@@ -229,18 +229,18 @@ class Pilot:
                 self._set_state(mode="NAVIGATE", left_pwm=0, right_pwm=0, last_note=f"ERROR: {e}")
                 print(f"[PILOT ERROR] {e}")
                 traceback.print_exc()
-                time.sleep(0.2)
+                time.sleep(1.0)
 
         # konec smyčky
         self._set_state(left_pwm=0, right_pwm=0)
 
     # ---------------------- API pro řízení -------------------
 
-    def navigate(self, start, goal, radius):
+    def navigate(self, start_lat, start_lon, goal_lat, goal_lon, goal_radius):
         """
         Spustí/obnoví navigační vlákno.
         Parametry z klienta přicházejí jako:
-          start = (lon, lat), goal = (lon, lat), radius [m]
+          start = (lat, lon), goal = (lat, lon), radius [m]
         """
         gnss = self.gnss_client
         drive = self.drive_client
@@ -250,11 +250,10 @@ class Pilot:
             if self._thread and self._thread.is_alive():
                 self._stop_event.set()
                 self._thread.join()
-            self.target = (start, goal, radius)
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._navigate_thread,
-                args=(gnss, drive, start, goal, radius,),
+                args=(gnss, drive, start_lat, start_lon, goal_lat, goal_lon, goal_radius,),
                 daemon=True
             )
             self._thread.start()

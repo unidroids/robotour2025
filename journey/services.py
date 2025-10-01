@@ -5,11 +5,11 @@ HOST = '127.0.0.1'
 
 def send_command(port, cmd, expect_response=True):
     try:
-        with socket.create_connection((HOST, port), timeout=3) as s:
+        with socket.create_connection((HOST, port), timeout=3) as sock:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            s.sendall((cmd+'\n').encode())
+            sock.sendall((cmd+'\n').encode())
             if expect_response:
-                resp = s.recv(1024).decode().strip()
+                resp = sock.recv(1024).decode().strip()
                 log_event(f"SERVICE[{port}] {cmd} → {resp}")
                 return resp
             else:
