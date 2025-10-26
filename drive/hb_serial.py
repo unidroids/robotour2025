@@ -4,10 +4,10 @@
 aby se předešlo kolizi se závislostí **pyserial** (modul `serial`).
 
 - Oddělená vlákna pro RX a TX
-- RX: čte byty, předává do DriveParser.feed(), validované zprávy (DriveRx)
-      ukládá do RX FIFO (queue.Queue)
+- RX: blokuje na 1 bajt s timeoutem; po přijetí vyčerpá `in_waiting` (nízká latence)
 - TX: vybírá z TX FIFO (bytes rámce) a posílá přes UART
-- Bez blokujících printů v hot‑path, jen počitadla
+- Datalogger: zapisuje odeslané rámce (HEX) a přijaté ASCII řádky (oddělené CRLF)
+- Bez zbytečných `sleep()` v hot‑path; blokování řídí `read(1)` s konfigurovatelným timeoutem
 
 Zařízení: '/dev/howerboard', 921600 Bd, 8N1
 
@@ -18,6 +18,7 @@ from __future__ import annotations
 import threading
 import queue
 import time
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -27,6 +28,7 @@ from parser import DriveParser, DriveRx  # náš inkrementální parser
 
 DEFAULT_DEVICE = "/dev/howerboard"
 DEFAULT_BAUD = 921600
+DEFAULT_LOG_DIR = "/data/robot/drive"
 
 __all__ = [
     "SerialConfig",
@@ -38,16 +40,20 @@ __all__ = [
 class SerialConfig:
     device: str = DEFAULT_DEVICE
     baudrate: int = DEFAULT_BAUD
-    timeout_s: float = 0.02       # read timeout (non‑blocking-ish)
+    timeout_s: float = 1.0        # read(1) timeout; max doba blokování mezi kontrolami stop_event
     write_timeout_s: float = 0.1  # write timeout
     rx_fifo_size: int = 256
     tx_fifo_size: int = 256
     read_chunk: int = 4096        # kolik max číst naráz
     reconnect_delay_s: float = 0.5
+    # Datalogger
+    enable_log: bool = True
+    log_dir: str = DEFAULT_LOG_DIR
+    log_flush: bool = False       # True => flush po každé řádce (vyšší režie)
 
 
 class HoverboardSerial:
-    """UART I/O s RX/TX vlákny a FIFO frontami."""
+    """UART I/O s RX/TX vlákny a FIFO frontami + datalogger."""
 
     def __init__(self, cfg: Optional[SerialConfig] = None):
         self.cfg = cfg or SerialConfig()
@@ -74,12 +80,20 @@ class HoverboardSerial:
         self._opened_lock = threading.Lock()
         self._opened = False
 
+        # Datalogger
+        self._rx_linebuf = bytearray()
+        self._log_tx_fh: Optional[object] = None
+        self._log_rx_fh: Optional[object] = None
+        self._log_tx_path: Optional[str] = None
+        self._log_rx_path: Optional[str] = None
+
     # ---------------- lifecycle ----------------
     def start(self) -> None:
         with self._opened_lock:
             if self._opened:
                 return
             self._stop_event.clear()
+            self._prepare_logger()
             self._open_port()
             self._writer_thr.start()
             self._reader_thr.start()
@@ -93,7 +107,7 @@ class HoverboardSerial:
             self._writer_wakeup.set()
             try:
                 if self._reader_thr.is_alive():
-                    self._reader_thr.join(timeout=0.3)
+                    self._reader_thr.join(timeout=self.cfg.timeout_s + 0.2)
             except Exception:
                 pass
             try:
@@ -107,6 +121,7 @@ class HoverboardSerial:
             except Exception:
                 pass
             self._ser = None
+            self._close_logger()
             self._opened = False
 
     # ---------------- public TX/RX API ----------------
@@ -162,18 +177,101 @@ class HoverboardSerial:
             self._open_failures += 1
             self._ser = None
 
+    # ---- Logger helpers ----
+    def _prepare_logger(self) -> None:
+        if not self.cfg.enable_log:
+            return
+        # Vytvoř adresář dle data: <log_dir>/YYYY-MM-DD/
+        try:
+            day_dir = time.strftime("%Y-%m-%d", time.localtime())
+            base_dir = os.path.join(self.cfg.log_dir, day_dir)
+            os.makedirs(base_dir, exist_ok=True)
+        except Exception:
+            # Nelze vytvořit adresář -> vypnout logging
+            self.cfg.enable_log = False
+            return
+        # Jméno souboru zachovává původní formát s datem i časem kvůli konzistenci
+        ts = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime())
+        self._log_tx_path = os.path.join(base_dir, f"{ts}-tx.dat")
+        self._log_rx_path = os.path.join(base_dir, f"{ts}-rx.dat")
+        try:
+            self._log_tx_fh = open(self._log_tx_path, "w", encoding="ascii", buffering=1)
+            self._log_rx_fh = open(self._log_rx_path, "w", encoding="ascii", buffering=1)
+        except Exception:
+            # Nepodařilo se otevřít soubory -> vypnout logging
+            self._log_tx_fh = None
+            self._log_rx_fh = None
+            self.cfg.enable_log = False
+
+    def _close_logger(self) -> None:
+        for fh in (self._log_tx_fh, self._log_rx_fh):
+            try:
+                if fh:
+                    fh.flush()
+                    fh.close()
+            except Exception:
+                pass
+        self._log_tx_fh = None
+        self._log_rx_fh = None
+
+    def _log_tx(self, frame: bytes) -> None:
+        if not (self.cfg.enable_log and self._log_tx_fh):
+            return
+        t = time.monotonic()
+        try:
+            self._log_tx_fh.write(f"{t:.6f} {frame.hex().upper()}\n")
+            if self.cfg.log_flush:
+                self._log_tx_fh.flush()
+        except Exception:
+            pass
+
+    def _rx_log_feed(self, data: bytes) -> None:
+        """Přijímaná data (ASCII). Při každém CRLF zapíše řádku s monotonic timestampem."""
+        if not (self.cfg.enable_log and self._log_rx_fh):
+            return
+        self._rx_linebuf.extend(data)
+        while True:
+            i = self._rx_linebuf.find(b"\n")
+            if i < 0:
+                break
+            line = bytes(self._rx_linebuf[:i])  # bez CRLF
+            del self._rx_linebuf[: i + 2]
+            t = time.monotonic()
+            try:
+                txt = line.decode("ascii", errors="replace")
+                self._log_rx_fh.write(f"{t:.6f} {txt}\n")
+                if self.cfg.log_flush:
+                    self._log_rx_fh.flush()
+            except Exception:
+                pass
+
+    # ---- RX/TX threads ----
     def _reader_loop(self) -> None:
+        cfg = self.cfg
         while not self._stop_event.is_set():
             if not self._ser or not self._ser.is_open:
                 self._open_port()
                 if not self._ser:
-                    time.sleep(self.cfg.reconnect_delay_s)
+                    time.sleep(cfg.reconnect_delay_s)
                     continue
 
             try:
-                data = self._ser.read(self.cfg.read_chunk)
+                # 1) Okamžitě vyčti vše, co je dostupné bez blokace
+                avail = self._ser.in_waiting
+                if avail:
+                    data = self._ser.read(min(avail, cfg.read_chunk))
+                else:
+                    # 2) Nemáme nic – blokuj na 1 bajt do timeoutu
+                    data = self._ser.read(1)
+                    # Pokud přišel aspoň jeden bajt, dočti zbytek, co stihl dorazit
+                    if data:
+                        avail = self._ser.in_waiting
+                        if avail:
+                            data += self._ser.read(min(avail, cfg.read_chunk))
+
                 if data:
                     self._rx_bytes += len(data)
+                    self._rx_log_feed(data)
                     msgs = self._parser.feed(data)
                     for m in msgs:
                         try:
@@ -181,8 +279,8 @@ class HoverboardSerial:
                             self._rx_msgs += 1
                         except queue.Full:
                             self._rx_overflows += 1
-                else:
-                    time.sleep(0.001)
+                # žádné "sleep"; řízení tempa zajišťuje blokace read(1) timeoutem
+
             except Exception:
                 try:
                     if self._ser:
@@ -190,9 +288,10 @@ class HoverboardSerial:
                 except Exception:
                     pass
                 self._ser = None
-                time.sleep(self.cfg.reconnect_delay_s)
+                time.sleep(cfg.reconnect_delay_s)
 
     def _writer_loop(self) -> None:
+        cfg = self.cfg
         while not self._stop_event.is_set():
             fired = self._writer_wakeup.wait(timeout=0.05)
             if fired:
@@ -212,6 +311,7 @@ class HoverboardSerial:
                         n = self._ser.write(frame)
                         self._tx_bytes += int(n or 0)
                         self._tx_frames += 1
+                        self._log_tx(frame)
                     except Exception:
                         try:
                             if self._ser:
