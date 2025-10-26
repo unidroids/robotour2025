@@ -103,7 +103,7 @@ def _reader_loop():
                         raw = buf[:nl_idx]              # bez \n
                         del buf[:nl_idx+1]              # odstraň vč. \n
                         text = raw.decode('ascii', errors='ignore').strip('\r')
-                        if text and _line_handler:
+                        if text and _line_handler and text[1]!='$':
                             try:
                                 _line_handler(text)
                             except Exception as e:
