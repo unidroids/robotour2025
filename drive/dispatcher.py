@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
-from parser import DriveRx, VALID_CODES
+#from parser import DriveRx, VALID_CODES
 from hb_serial import HoverboardSerial  # náš modul serial.py (pyserial je importován uvnitř něj)
 
 __all__ = [

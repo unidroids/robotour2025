@@ -1,178 +1,234 @@
-"""parser.py – inkrementální parser pro příchozí věty z hoverboardu
-
-Formát věty (ASCII):
-  "$XXX<value>,<value>,<value>,<value>*\r\n"
-  - $   : úvodní znak
-  - XXX : kód zprávy, 3× velké písmeno (IAM, INM, MSM, ODM, DIM, SEM, SWM)
-  - <value>: celočíselné hodnoty (mohou být i se znaménkem), vždy přesně 4, oddělené čárkou
-  - *   : ukončovací znak hodnot
-  - CRLF: konec věty ("\r\n")
-
-Cíl:
-  - rychlý, inkrementální parser vhodný pro 921600 Bd
-  - validace struktury před předáním dál (FIFO)
-  - žádné blokující I/O; bez printů v hot path
-
-Použití:
-  parser = DriveParser()
-  messages = parser.feed(b"$IAM1,2,3,4*\r\n...")
-  for m in messages:
-      # vložit do příchozí FIFO
-
-Poznámky k výkonu:
-  - používá interní bytestream buffer a hledá CRLF\n
-  - regex je předkompilovaný (rychlý path)
-  - ořezává šum před "$" a chrání se proti nekonečné větě (max_line)
+# parser.py
 """
+Jednoduchý NMEA-like stream parser s kontrolou payload znaků a XOR8 checksumem.
+
+Formát:
+    $ <payload> * <CS> <CR><LF>
+
+- payload: znaky z množiny [0-9 A-Z , -]
+- CS    : 2 hex [0-9 A-F], je XOR8 přes payload (bez '$' a '*')
+- '$'   : začátek věty; pokud dorazí nový '$' dříve než CRLF, zahodíme torzo a
+          zvýšíme junk_count.
+- Pokud payload obsahuje nepovolený znak -> bad_char_count (+ discard do CRLF nebo nového '$').
+- Pokud CS nesedí -> cs_error_count (+ discard aktuální větu).
+- Při úspěchu vrací celé věty včetně řídicích znaků ($…*CS\r\n).
+"""
+
 from __future__ import annotations
+from typing import List
 
-from dataclasses import dataclass
-from typing import List, Tuple
-import re
-import time
-
-__all__ = [
-    "DriveRx",
-    "DriveParser",
-    "VALID_CODES",
-]
-
-# Povolené kódy zpráv
-VALID_CODES = {"IAM", "INM", "MSM", "ODM", "DIM", "SEM", "SWM"}
-
-# Předkompilovaný regex přesnou strukturou věty
-# Příklad: $IAM-1,0,25,123*\r\n
-_RX = re.compile(
-    rb"^\$(?P<code>[A-Z]{3})(?P<vals>-?\d+,-?\d+,-?\d+,-?\d+)\*\r\n$"
-)
-
-@dataclass(frozen=True)
-class DriveRx:
-    code: str
-    values: Tuple[int, int, int, int]
-    raw: bytes  # včetně CRLF
-    t_mono: float  # čas dekódování (monotonic)
-
-    def __repr__(self) -> str:
-        v = ",".join(str(x) for x in self.values)
-        return f"DriveRx(code={self.code}, values=({v}))"
+__all__ = ["DriveParser"]
 
 
 class DriveParser:
-    """Inkrementální parser řádkovaných vět.
+    # --- Stavový automat ---
+    S_FIND_DOLLAR = 0  # čekáme na '$'
+    S_PAYLOAD     = 1  # sbíráme payload (povolené znaky)
+    S_CS          = 2  # čteme 2 hex číslice CS
+    S_CR          = 3  # čekáme '\r'
+    S_LF          = 4  # čekáme '\n'
+    S_DISCARD     = 5  # zahazujeme do CRLF nebo nového '$' (po chybě)
 
-    feed() lze volat s libovolně dlouhým chunkem bytes. Vrací seznam již
-    kompletně validovaných zpráv DriveRx. V případě poškozených dat se
-    parser pokusí resynchronizovat na další '\r\n' + '$'.
-    """
+    def __init__(self, *, max_payload_len: int = 240):
+        self.state = self.S_FIND_DOLLAR
 
-    def __init__(self, *, max_line: int = 128):
-        self._buf = bytearray()
-        self._max_line = max_line
-        # Statistiky (nejsou povinné; čitelnost při ladění)
-        self.bad_lines = 0
-        self.too_long_lines = 0
-        self.unknown_codes = 0
+        self._payload = bytearray()
+        self._cs_buf  = bytearray()   # 0..2 bajty ASCII [0-9A-F]
+        self._raw_buf = bytearray()   # pro rekonstrukci celé věty
 
+        self.max_payload_len = max_payload_len
+
+        # Counters
+        self.junk_count = 0
+        self.bad_char_count = 0
+        self.cs_error_count = 0
+        self.too_long_count = 0
+
+    # --- Public API ---
     def reset(self) -> None:
-        """Vyčistí interní buffer a statistiky (bez side‑effectů)."""
-        self._buf.clear()
-        self.bad_lines = 0
-        self.too_long_lines = 0
-        self.unknown_codes = 0
+        self.state = self.S_FIND_DOLLAR
+        self._payload.clear()
+        self._cs_buf.clear()
+        self._raw_buf.clear()
+        self.junk_count = 0
+        self.bad_char_count = 0
+        self.cs_error_count = 0
+        self.too_long_count = 0
 
-    def feed(self, chunk: bytes) -> List[DriveRx]:
+    def feed(self, chunk: bytes) -> List[bytes]:
+        """Zpracuje libovolný chunk bytů. Vrací list validních vět ($…*CS\\r\\n)."""
+        out: List[bytes] = []
         if not chunk:
-            return []
-        self._buf.extend(chunk)
-        out: List[DriveRx] = []
+            return out
 
-        while True:
-            # Najdi konec řádku (CRLF)
-            nl = self._find_eol(self._buf)
-            if nl < 0:
-                # Pokud je buffer příliš dlouhý bez CRLF, odhoď vše před posledním '$'
-                if len(self._buf) > self._max_line:
-                    self._drop_until_last_dollar()
-                break
+        for b in chunk:
+            if self.state == self.S_FIND_DOLLAR:
+                if b == 0x24:  # '$'
+                    self._start_new_raw()
+                    self._raw_buf.append(b)
+                    self.state = self.S_PAYLOAD
+                else:
+                    # ignoruj šum před začátkem věty
+                    continue
 
-            # Máme celý řádek včetně CRLF
-            line = bytes(self._buf[: nl + 2])  # vč. CRLF
-            del self._buf[: nl + 2]
+            elif self.state == self.S_PAYLOAD:
+                if b == 0x24:  # nový '$' před CRLF -> junk
+                    self.junk_count += 1
+                    self._start_new_raw()
+                    self._raw_buf.append(b)
+                    self._payload.clear()
+                    self._cs_buf.clear()
+                    # zůstáváme v S_PAYLOAD
+                elif b == 0x2A:  # '*'
+                    self._raw_buf.append(b)
+                    self._cs_buf.clear()
+                    self.state = self.S_CS
+                elif self._is_payload_char(b):
+                    if len(self._payload) >= self.max_payload_len:
+                        # payload přes limit -> zahazuj do CRLF/nového '$'
+                        self.too_long_count += 1
+                        self.state = self.S_DISCARD
+                    else:
+                        self._payload.append(b)
+                        self._raw_buf.append(b)
+                elif b in (0x0D, 0x0A):  # CR/LF v payloadu je chyba formátu
+                    self.junk_count += 1
+                    self.state = self.S_FIND_DOLLAR
+                    self._payload.clear()
+                    self._cs_buf.clear()
+                    self._raw_buf.clear()
+                else:
+                    # nepovolený znak v payloadu
+                    self.bad_char_count += 1
+                    self.state = self.S_DISCARD
 
-            # Ořezat šum před '$'
-            start = line.find(b"$")
-            if start > 0:
-                line = line[start:]
+            elif self.state == self.S_CS:
+                if b == 0x24:  # nový '$' uprostřed CS -> junk + restart
+                    self.junk_count += 1
+                    self._start_new_raw()
+                    self._raw_buf.append(b)
+                    self._payload.clear()
+                    self._cs_buf.clear()
+                    self.state = self.S_PAYLOAD
+                elif self._is_hex(b):
+                    if len(self._cs_buf) < 2:
+                        self._cs_buf.append(b)
+                        self._raw_buf.append(b)
+                    else:
+                        # více než 2 hexy do CS -> junk
+                        self.junk_count += 1
+                        self.state = self.S_DISCARD
+                elif b == 0x0D:  # CR
+                    if len(self._cs_buf) != 2:
+                        self.junk_count += 1
+                        self.state = self.S_FIND_DOLLAR
+                        self._clear_all()
+                    else:
+                        self._raw_buf.append(b)
+                        self.state = self.S_LF
+                else:
+                    # cokoliv jiného v CS je junk (formát CS řešíme striktně)
+                    self.junk_count += 1
+                    self.state = self.S_DISCARD
 
-            # Rychlá validace délky
-            if len(line) > self._max_line:
-                self.too_long_lines += 1
-                continue
+            elif self.state == self.S_LF:
+                if b == 0x0A:  # LF -> konec věty, ověř CS
+                    self._raw_buf.append(b)
+                    if self._validate_checksum():
+                        out.append(bytes(self._raw_buf))
+                    else:
+                        self.cs_error_count += 1
+                    # reset pro další větu
+                    self.state = self.S_FIND_DOLLAR
+                    self._clear_all()
+                elif b == 0x24:  # místo LF přišel nový start -> junk + start nové věty
+                    self.junk_count += 1
+                    self._start_new_raw()
+                    self._raw_buf.append(b)
+                    self._payload.clear()
+                    self._cs_buf.clear()
+                    self.state = self.S_PAYLOAD
+                else:
+                    # cokoli jiného než LF -> junk
+                    self.junk_count += 1
+                    self.state = self.S_DISCARD
 
-            # Musí končit CRLF
-            if not line.endswith(b"\r\n"):
-                self.bad_lines += 1
-                continue
-
-            # Pustit regex
-            m = _RX.match(line)
-            if not m:
-                self.bad_lines += 1
-                continue
-
-            code = m.group("code").decode("ascii")
-            if code not in VALID_CODES:
-                self.unknown_codes += 1
-                continue
-
-            vals_b = m.group("vals")  # b"v1,v2,v3,v4"
-            try:
-                v1, v2, v3, v4 = (int(x) for x in vals_b.split(b","))
-            except ValueError:
-                self.bad_lines += 1
-                continue
-
-            out.append(
-                DriveRx(
-                    code=code,
-                    values=(v1, v2, v3, v4),
-                    raw=line,
-                    t_mono=time.monotonic(),
-                )
-            )
+            elif self.state == self.S_DISCARD:
+                # zahazujeme až do CRLF nebo do nového '$'
+                if b == 0x24:  # nový start
+                    self._start_new_raw()
+                    self._raw_buf.append(b)
+                    self._payload.clear()
+                    self._cs_buf.clear()
+                    self.state = self.S_PAYLOAD
+                elif b == 0x0A:
+                    # dorazil LF -> konec rozbité linky, zpět do FIND_DOLLAR
+                    self.state = self.S_FIND_DOLLAR
+                    self._clear_all()
+                else:
+                    # jinak jen zahazujeme
+                    pass
 
         return out
 
-    # --- pomocné metody ---
+    # --- helpers ---
+    def _start_new_raw(self) -> None:
+        self._raw_buf.clear()
+
+    def _clear_all(self) -> None:
+        self._payload.clear()
+        self._cs_buf.clear()
+        self._raw_buf.clear()
+
     @staticmethod
-    def _find_eol(buf: bytearray) -> int:
-        """Najde index '\r' tak, aby následovalo '\n'. Pokud nenalezeno, vrací -1."""
-        # Hledáme od konce (typicky méně kroků)
-        idx = buf.rfind(b"\n")
-        if idx <= 0:
-            return -1
-        # zajisti že před \n je \r
-        if idx > 0 and buf[idx - 1] == 13:  # ord('\r')
-            return idx - 1
-        return -1
+    def _is_payload_char(b: int) -> bool:
+        """Povolené znaky payloadu: [0-9 A-Z , -]"""
+        return (48 <= b <= 57) or (65 <= b <= 90) or b in (44, 45)
 
-    def _drop_until_last_dollar(self) -> None:
-        """Při overflow vyhoď vše do posledního '$' (resync)."""
-        last = self._buf.rfind(b"$")
-        if last <= 0:
-            # nic rozumného – čistý reset
-            self._buf.clear()
-        else:
-            del self._buf[: last]
+    @staticmethod
+    def _is_hex(b: int) -> bool:
+        """Povolené CS znaky: [0-9 A-F]"""
+        return (48 <= b <= 57) or (65 <= b <= 70)
+
+    def _validate_checksum(self) -> bool:
+        """XOR8 přes payload, porovná s CS (2 hex)."""
+        calc = 0
+        for bb in self._payload:
+            calc ^= bb
+        # převod dvou ASCII hex na int
+        try:
+            cs_val = int(self._cs_buf.decode("ascii"), 16)
+        except Exception:
+            return False
+        return (calc & 0xFF) == cs_val
 
 
-# --- jednoduchý self‑test ---
+# --- jednoduchý self-test ---
 if __name__ == "__main__":
+    def make_sentence(payload: bytes) -> bytes:
+        cs = 0
+        for b in payload:
+            cs ^= b
+        cs_hex = f"{cs:02X}".encode("ascii")
+        return b"$" + payload + b"*" + cs_hex + b"\r\n"
+
     p = DriveParser()
-    sample = (
-        b"garbage$IAM1,2,3,4*\r\n$MSM-1,0,250,9*\r\n$BAD1,2,3,4*\r\n$ODM0,0,0,0*\r\n"
-    )
-    msgs = p.feed(sample)
-    print("decoded:", msgs)
-    print("bad:", p.bad_lines, "too_long:", p.too_long_lines, "unknown:", p.unknown_codes)
+
+    ok1 = make_sentence(b"ABC,123")
+    ok2 = make_sentence(b"VEL-1,XYZ")
+    bad_char = b"$ABC,12z*00\r\n"          # 'z' -> bad_char
+    bad_cs   = b"$ABC,123*00\r\n"          # špatné CS
+    junk_mid = b"salkdhaslj$\r\nABC,1" + b"$" + b"VEL,2*00\r\n"  # nový '$' uprostřed
+    # valid po junku:
+    ok3 = make_sentence(b"MSM,7F")
+
+    stream = ok1 + bad_char + bad_cs + junk_mid + ok3 + ok2
+
+    out = p.feed(stream)
+    for i, s in enumerate(out, 1):
+        print(i, s)
+
+    print("junk      :", p.junk_count)
+    print("bad_char  :", p.bad_char_count)
+    print("cs_error  :", p.cs_error_count)
+    print("too_long  :", p.too_long_count)
