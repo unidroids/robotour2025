@@ -1,5 +1,6 @@
 # nmea_dispatcher.py
 import threading
+import sys
 from typing import Callable, Dict
 
 class NmeaDispatcher:

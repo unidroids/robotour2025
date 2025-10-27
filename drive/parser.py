@@ -43,6 +43,7 @@ class DriveParser:
         self.bad_char_count = 0
         self.cs_error_count = 0
         self.too_long_count = 0
+        self.senetces_parsed = 0
 
     # --- Public API ---
     def reset(self) -> None:
@@ -54,6 +55,7 @@ class DriveParser:
         self.bad_char_count = 0
         self.cs_error_count = 0
         self.too_long_count = 0
+        self.senetces_parsed = 0
 
     def feed(self, chunk: bytes) -> List[bytes]:
         """Zpracuje libovolný chunk bytů. Vrací list validních vět ($…*CS\\r\\n)."""
@@ -169,6 +171,7 @@ class DriveParser:
                     # jinak jen zahazujeme
                     pass
 
+        self.senetces_parsed += len(out)
         return out
 
     # --- helpers ---
@@ -232,3 +235,4 @@ if __name__ == "__main__":
     print("bad_char  :", p.bad_char_count)
     print("cs_error  :", p.cs_error_count)
     print("too_long  :", p.too_long_count)
+    print("parsed    :", p.senetces_parsed)

@@ -24,7 +24,7 @@ from typing import Optional, Tuple
 
 import serial as pyserial  # pyserial – vyhneme se kolizi názvů
 
-from parser import DriveParser, DriveRx  # náš inkrementální parser
+from parser import DriveParser # náš inkrementální parser
 
 DEFAULT_DEVICE = "/dev/howerboard"
 DEFAULT_BAUD = 921600
@@ -59,7 +59,7 @@ class HoverboardSerial:
         self.cfg = cfg or SerialConfig()
         self._ser: Optional[pyserial.Serial] = None
 
-        self._rx_fifo: "queue.Queue[DriveRx]" = queue.Queue(maxsize=self.cfg.rx_fifo_size)
+        self._rx_fifo: "queue.Queue[bytes]" = queue.Queue(maxsize=self.cfg.rx_fifo_size)
         self._tx_fifo: "queue.Queue[bytes]" = queue.Queue(maxsize=self.cfg.tx_fifo_size)
 
         self._stop_event = threading.Event()
@@ -67,7 +67,7 @@ class HoverboardSerial:
         self._reader_thr = threading.Thread(target=self._reader_loop, name="drive-rx", daemon=True)
         self._writer_thr = threading.Thread(target=self._writer_loop, name="drive-tx", daemon=True)
 
-        self._parser = DriveParser(max_line=128)
+        self._parser = DriveParser()
         # počitadla
         self._rx_bytes = 0
         self._tx_bytes = 0
@@ -136,27 +136,26 @@ class HoverboardSerial:
             self._tx_overflows += 1
             return False
 
-    def get_rx(self, timeout: Optional[float] = None) -> Optional[DriveRx]:
+    def get_message(self, timeout: Optional[float] = 1) -> Optional[bytes]:
         try:
             return self._rx_fifo.get(timeout=timeout)
         except queue.Empty:
             return None
 
-    @property
-    def rx_queue(self) -> "queue.Queue[DriveRx]":
-        return self._rx_fifo
-
-    def stats(self) -> Tuple[int, int, int, int, int, int, int, int, int]:
+    def stats(self) -> Tuple[int, int, int, int, int, int, int, int, int, int, int, int]:
         return (
+            self._open_failures,
             self._rx_bytes,
             self._tx_bytes,
             self._rx_msgs,
             self._tx_frames,
             self._rx_overflows,
             self._tx_overflows,
-            self._parser.bad_lines,
-            self._parser.too_long_lines,
-            self._parser.unknown_codes,
+            self._parser.junk_count,
+            self._parser.bad_char_count,
+            self._parser.cs_error_count,
+            self._parser.too_long_count,
+            self._parser.senetces_parsed,
         )
 
     # ---------------- internals ----------------
@@ -250,10 +249,8 @@ class HoverboardSerial:
         cfg = self.cfg
         while not self._stop_event.is_set():
             if not self._ser or not self._ser.is_open:
-                self._open_port()
-                if not self._ser:
-                    time.sleep(cfg.reconnect_delay_s)
-                    continue
+                time.sleep(0.01)
+                continue
 
             try:
                 # 1) Okamžitě vyčti vše, co je dostupné bez blokace
@@ -293,14 +290,20 @@ class HoverboardSerial:
     def _writer_loop(self) -> None:
         cfg = self.cfg
         while not self._stop_event.is_set():
-            fired = self._writer_wakeup.wait(timeout=0.05)
-            if fired:
-                self._writer_wakeup.clear()
-
+            # 1) Zkontroluj, zda je port otevřený
             if not self._ser or not self._ser.is_open:
-                time.sleep(0.01)
+                self._open_port()
+                if not self._ser:
+                    time.sleep(cfg.reconnect_delay_s)
                 continue
 
+            # 2) Počkej na data k odeslání nebo stop event
+            fired = self._writer_wakeup.wait(timeout=1)
+            if not fired:
+                continue  # timeout – zkontroluj stop_event znovu
+            self._writer_wakeup.clear()
+            
+            # 3) Odesílej, dokud je co odesílat                
             try:
                 while True:
                     try:
@@ -320,8 +323,9 @@ class HoverboardSerial:
                             pass
                         self._ser = None
                         break
-            except Exception:
-                time.sleep(0.01)
+            except Exception as e:
+                print(f"Unexpected error in HoverboardSerial TX thread : {e}")
+                
 
 
 if __name__ == "__main__":
@@ -331,7 +335,7 @@ if __name__ == "__main__":
     try:
         t0 = time.time()
         while True:
-            m = hb.get_rx(timeout=0.05)
+            m = hb.get_sentence()
             if m is not None:
                 print("RX:", m)
             if time.time() - t0 > 1.0:
