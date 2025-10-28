@@ -26,7 +26,7 @@ ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9003/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/robot/opt/projects/robotour/venv-robotour/bin/python /opt/projects/robotour/drive/drive_server.py
+ExecStart=/robot/opt/projects/robotour/venv-robotour/bin/python /opt/projects/robotour/drive/main.py
 
 StandardOutput=append:$LOG_FILE
 StandardError=append:$LOG_FILE

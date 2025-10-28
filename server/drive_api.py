@@ -14,8 +14,8 @@ DRIVE_CMD_MAP = {
     "start"     : "START",
     "stop"      : "STOP",
     "break"     : "BREAK",
-    "forward"   : "PWM 20 20",
-    "backward"  : "PWM -20 -20",
+    "forward"   : "DRIVE 100 20 20",
+    "backward"  : "DRIVE 100 -20 -20",
 }
 
 def send_drive(cmd: str, timeout=20) -> str:
