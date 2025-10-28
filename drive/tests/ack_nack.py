@@ -3,22 +3,22 @@ from __future__ import annotations
 import time
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
-# --- rámcové konstanty (přebíráme vaše) ---
+# --- rámcové konstanty (podle tvé specifikace) ---
 STX = 251
 MTX = 252
 ETX = 253
 
-# --- pomocné typy ---
+# --- typy ---
 CmdKey = Tuple[int, int, int, int, int]  # (cmd, p1, p2, p3, p4)
 
 @dataclass
 class AckResult:
-    ok: bool                     # True=ACK, False=NACK/timeout
+    ok: bool                    # True=ACK, False=NACK/timeout
     is_timeout: bool
-    input_err: int = 0           # INM: "quality" (input) error
-    cmd_err: int = 0             # INM: command/param error
+    input_err: int = 0          # INM: quality/input error
+    cmd_err: int = 0            # INM: command/param error
     rtt_ms: float = 0.0
     sent_mono_ns: int = 0
     ack_mono_ns: int = 0
@@ -30,31 +30,32 @@ def _assert_param(v: int) -> None:
     if iv < 0 or iv > 250:
         raise ValueError(f"Param {iv} out of range 0..250")
 
-# --- util: sestavení binárního rámce pro TX (váš formát) ---
+# --- util: sestavení binárního rámce pro TX (tvůj formát) ---
 def build_frame(cmd: int, p1: int, p2: int, p3: int, p4: int) -> bytes:
     for v in (cmd, p1, p2, p3, p4):
         _assert_param(v)
+    # [STX, cmd, p1, p2, p3, p4, MTX, cmd, p1, p2, p3, p4, ETX]
     return bytes([STX, cmd, p1, p2, p3, p4, MTX, cmd, p1, p2, p3, p4, ETX])
 
-# --- util: NMEA checksum (XOR payloadu) ---
-def nmea_checksum(payload: str) -> int:
+# --- util: XOR8 checksum pro NMEA-like řetězce ---
+def nmea_checksum(body: str) -> int:
     cs = 0
-    for ch in payload:
+    for ch in body:
         cs ^= ord(ch)
     return cs & 0xFF
 
-# --- util: parse NMEA-like line: b"$IAM,...*CS\r\n" -> ("IAM",[str...]) ---
+# --- util: parse celé NMEA-like věty b"$INM50,...*CS\r\n" -> ("INM50",[fieldy]) ---
 def parse_nmea_line(msg: bytes) -> Tuple[str, list]:
     """
-    Vrací (code, fields). Vyhazuje ValueError při chybě.
+    Vrací (code_with_cmd, fields_as_strings).
+    Vyhazuje ValueError, pokud chybí $, * nebo nesedí CS.
     """
     s = msg.decode(errors="ignore").strip()
     if not s.startswith("$"):
-        raise ValueError("No $")
+        raise ValueError("No $ at start")
     if "*" not in s:
-        raise ValueError("No *")
-    body, cs_part = s[1:].split("*", 1)
-    # cs_part může obsahovat i CR/LF; odřízneme
+        raise ValueError("No * (checksum separator)")
+    body, cs_part = s[1:].split("*", 1)  # bez "$"
     cs_hex = cs_part.strip()[:2]
     try:
         cs_val = int(cs_hex, 16)
@@ -62,21 +63,33 @@ def parse_nmea_line(msg: bytes) -> Tuple[str, list]:
         raise ValueError(f"Bad CS hex: {e}")
     calc = nmea_checksum(body)
     if calc != cs_val:
-        raise ValueError(f"CS mismatch: got {cs_val:02X} calc {calc:02X}")
-    # body: "IAM,<payload...>" => code=IAM
+        raise ValueError(f"Checksum mismatch: got {cs_val:02X}, calc {calc:02X}")
+
+    # body je "INM50,..." nebo "IAM50,..."
     if "," in body:
-        code, rest = body.split(",", 1)
+        code_with_cmd, rest = body.split(",", 1)
         fields = rest.split(",") if rest else []
     else:
-        code = body
+        code_with_cmd = body
         fields = []
-    return code, fields
+    return code_with_cmd, fields
 
-# --- util: base-251 kódování 32bit čísla do p1..p4 (0..250) ---
-# 251^4 ~= 3.97e9 ~ 2^32, akorát na 32bit (us timestamp modulo rozsah).
+# --- util: rozdělení "INM50" -> ("INM", 50) ---
+def split_code_and_cmd(code_with_cmd: str) -> Tuple[str, Optional[int]]:
+    base = code_with_cmd[:3].upper()
+    tail = code_with_cmd[3:]
+    if not tail:
+        return base, None
+    try:
+        return base, int(tail)
+    except ValueError:
+        return base, None
+
+# --- base-251 kódování/decodování 32bit čísla do p1..p4 (0..250) ---
 BASE = 251
+
 def base251_encode_u32(val: int) -> Tuple[int, int, int, int]:
-    v = val % (BASE**4)
+    v = val % (BASE ** 4)
     d0 = v % BASE; v //= BASE
     d1 = v % BASE; v //= BASE
     d2 = v % BASE; v //= BASE
@@ -88,16 +101,18 @@ def base251_decode_u32(p1: int, p2: int, p3: int, p4: int) -> int:
         _assert_param(x)
     return (p4 * BASE**3) + (p3 * BASE**2) + (p2 * BASE) + p1
 
-# --- rozhodování o retry: quality vs param chyby ---
+def params_from_monotonic_now_us() -> Tuple[int, int, int, int]:
+    ts_us = time.monotonic_ns() // 1000
+    return base251_encode_u32(ts_us)
+
+def decode_ts_us_from_params(p1: int, p2: int, p3: int, p4: int) -> int:
+    return base251_decode_u32(p1, p2, p3, p4)
+
+# --- retry politika: retry jen při quality chybě (input_err!=0, cmd_err==0) ---
 def is_retryable(input_err: int, cmd_err: int) -> bool:
-    """
-    Heuristika: pokud je problém v kvalitě vstupu (input_err!=0) a cmd_err==0,
-    je smysluplné opakovat; naopak param chyby retry nedává.
-    Feintuning podle vaší FW tabulky chyb později.
-    """
     return (input_err != 0) and (cmd_err == 0)
 
-# --- jednoduchý rate limiter ---
+# --- rate limiter ---
 class RateLimiter:
     def __init__(self, min_interval_ms: int = 10):
         self.min_interval_ns = int(min_interval_ms * 1e6)
@@ -113,12 +128,12 @@ class RateLimiter:
                 now = time.monotonic_ns()
             self._last_ns = now
 
-# --- Ack/Nack manager + handlery pro MessageDispatcher ---
+# --- Ack/Nack manager ---
 class AckNackManager:
     """
-    - registruje se do MessageDispatcher na kódy 'IAM' (ACK) a 'INM' (NACK)
-    - mapuje pending příkazy (cmd,p1..p4) -> Condition + metadata
-    - send_and_wait() pošle rámec, čeká na ACK/NACK (Stop-and-Wait), řeší retry
+    - Registruje handlery pro 'IAM' a 'INM' do MessageDispatcher.
+    - Matching na (cmd,p1,p2,p3,p4) – cmd je číslo v kódu zprávy: 'IAM50', 'INM50'.
+    - Stop-and-Wait: 1 outstanding se stejným obsahem (v praxi stačí, FW nemá frontu).
     """
     def __init__(self, hb, dispatcher, min_interval_ms: int = 10, ack_timeout_ms: int = 20):
         self.hb = hb
@@ -127,19 +142,16 @@ class AckNackManager:
         self.ack_timeout_ms = ack_timeout_ms
 
         self._lock = threading.Lock()
-        self._pending: Dict[CmdKey, Dict] = {}  # key -> {"cond":..., "sent_ns":..., "result": AckResult|None}
+        self._pending: Dict[CmdKey, Dict] = {}  # key -> {"cond":Condition, "sent_ns":int, "result": AckResult|None}
 
         # registrace handlerů
         self.dispatcher.register_handler('IAM', self._AckHandler(self))
         self.dispatcher.register_handler('INM', self._NackHandler(self))
 
-    # --- vnější API ---
+    # veřejné API
     def send_and_wait(self, cmd: int, p1: int, p2: int, p3: int, p4: int,
                       timeout_ms: Optional[int] = None,
                       retries: int = 2) -> AckResult:
-        """
-        Stop-and-Wait, matching obsahem (cmd,p1..p4). Retries na quality NACK / timeout.
-        """
         if timeout_ms is None:
             timeout_ms = self.ack_timeout_ms
 
@@ -148,7 +160,7 @@ class AckNackManager:
         last_result: Optional[AckResult] = None
 
         while True:
-            # rate-limit slot
+            # rate-limit
             self.rate.await_slot()
 
             sent_ns = time.monotonic_ns()
@@ -157,28 +169,24 @@ class AckNackManager:
             # zaregistruj pending
             with self._lock:
                 if key not in self._pending:
-                    self._pending[key] = {
-                        "cond": threading.Condition(),
-                        "sent_ns": sent_ns,
-                        "result": None,
-                    }
+                    self._pending[key] = {"cond": threading.Condition(), "sent_ns": sent_ns, "result": None}
                 else:
-                    # přepisujeme sent_ns pro případ retry stejného obsahu
                     self._pending[key]["sent_ns"] = sent_ns
                     self._pending[key]["result"] = None
 
-            ok = self.hb.send_frame(frame)
-            if not ok:
-                # okamžitý fail zápisu na UART
+            if not self.hb.send_frame(frame):
                 with self._lock:
                     self._pending.pop(key, None)
-                return AckResult(ok=False, is_timeout=False, input_err=0, cmd_err=0, rtt_ms=0.0, sent_mono_ns=sent_ns, ack_mono_ns=sent_ns, retries_done=retries_done)
+                return AckResult(ok=False, is_timeout=False, rtt_ms=0.0,
+                                 sent_mono_ns=sent_ns, ack_mono_ns=sent_ns, retries_done=retries_done)
 
             # čekání na ACK/NACK
             deadline = sent_ns + int(timeout_ms * 1e6)
             result: Optional[AckResult] = None
+
             with self._lock:
                 cond = self._pending[key]["cond"]
+
             while True:
                 now = time.monotonic_ns()
                 remain_ns = deadline - now
@@ -186,7 +194,6 @@ class AckNackManager:
                     break
                 timeout_s = remain_ns / 1e9
                 with cond:
-                    # unlock mezi čekáními, _on_ack/_on_nack nastaví result + notify
                     cond.wait(timeout_s)
                 with self._lock:
                     result = self._pending[key]["result"]
@@ -197,28 +204,23 @@ class AckNackManager:
                 # timeout
                 retries_done += 1
                 last_result = AckResult(
-                    ok=False, is_timeout=True, input_err=0, cmd_err=0,
-                    rtt_ms=float((time.monotonic_ns() - sent_ns) / 1e6),
-                    sent_mono_ns=sent_ns, ack_mono_ns=time.monotonic_ns(),
-                    retries_done=retries_done
+                    ok=False, is_timeout=True, rtt_ms=float((time.monotonic_ns() - sent_ns) / 1e6),
+                    sent_mono_ns=sent_ns, ack_mono_ns=time.monotonic_ns(), retries_done=retries_done
                 )
                 if retries_done > retries:
-                    # konec: vyčisti pending
                     with self._lock:
                         self._pending.pop(key, None)
                     return last_result
-                # jinak retry loop
-                continue
+                continue  # retry
 
             # máme ACK/NACK
             result.retries_done = retries_done
             if result.ok:
-                # úklid
                 with self._lock:
                     self._pending.pop(key, None)
                 return result
             else:
-                # NACK – rozhodni retry
+                # NACK: retry jen pro quality
                 if is_retryable(result.input_err, result.cmd_err) and retries_done < retries:
                     retries_done += 1
                     last_result = result
@@ -228,40 +230,38 @@ class AckNackManager:
                         self._pending.pop(key, None)
                     return result
 
-    # --- vnitřní: dokončení pendingu ---
+    # vnitřní: dokončení pendingu
     def _complete(self, key: CmdKey, ok: bool, input_err: int, cmd_err: int, ack_ns: int):
         with self._lock:
             pend = self._pending.get(key)
             if not pend:
-                return  # nic nečeká (pozdní/dup ACK); ignoruj
+                return  # pozdní/dup ACK – ignoruj
             sent_ns = pend["sent_ns"]
             rtt_ms = float((ack_ns - sent_ns) / 1e6)
-            res = AckResult(
-                ok=ok, is_timeout=False, input_err=input_err, cmd_err=cmd_err,
-                rtt_ms=rtt_ms, sent_mono_ns=sent_ns, ack_mono_ns=ack_ns
-            )
+            res = AckResult(ok=ok, is_timeout=False, input_err=input_err, cmd_err=cmd_err,
+                            rtt_ms=rtt_ms, sent_mono_ns=sent_ns, ack_mono_ns=ack_ns)
             pend["result"] = res
             cond = pend["cond"]
         with cond:
             cond.notify_all()
 
-    # --- handlery pro MessageDispatcher ---
+    # --- handlery registrované v dispatcheru ---
     class _AckHandler:
         def __init__(self, mgr: 'AckNackManager'):
             self.mgr = mgr
         def handle(self, message_bytes: bytes):
             try:
-                code, fields = parse_nmea_line(message_bytes)
-                # IAM očekává: cmd,p1,p2,p3,p4
-                if code != "IAM":
+                code_with_cmd, fields = parse_nmea_line(message_bytes)
+                base, cmdnum = split_code_and_cmd(code_with_cmd)
+                if base != "IAM" or cmdnum is None:
                     return
-                if len(fields) != 5:
+                # očekáváme alespoň p1..p4
+                if len(fields) < 4:
                     return
-                cmd, p1, p2, p3, p4 = [int(x) for x in fields]
-                key: CmdKey = (cmd, p1, p2, p3, p4)
+                p1, p2, p3, p4 = [int(x) for x in fields[:4]]
+                key = (int(cmdnum), p1, p2, p3, p4)
                 self.mgr._complete(key, ok=True, input_err=0, cmd_err=0, ack_ns=time.monotonic_ns())
             except Exception:
-                # ignoruj chyby parsování
                 pass
 
     class _NackHandler:
@@ -269,31 +269,31 @@ class AckNackManager:
             self.mgr = mgr
         def handle(self, message_bytes: bytes):
             try:
-                code, fields = parse_nmea_line(message_bytes)
-                # INM očekává: cmd,p1,p2,p3,p4,input_err,cmd_err
-                if code != "INM":
+                code_with_cmd, fields = parse_nmea_line(message_bytes)
+                base, cmdnum = split_code_and_cmd(code_with_cmd)
+                if base != "INM" or cmdnum is None:
                     return
-                if len(fields) != 7:
+                # očekáváme p1..p4 + in_err + cmd_err
+                if len(fields) < 6:
                     return
-                cmd, p1, p2, p3, p4, input_err, cmd_err = [int(x) for x in fields]
-                key: CmdKey = (cmd, p1, p2, p3, p4)
-                self.mgr._complete(key, ok=False, input_err=input_err, cmd_err=cmd_err, ack_ns=time.monotonic_ns())
+                p1, p2, p3, p4, in_err, cmd_err = [int(x) for x in fields[:6]]
+                key = (int(cmdnum), p1, p2, p3, p4)
+                self.mgr._complete(key, ok=False, input_err=in_err, cmd_err=cmd_err, ack_ns=time.monotonic_ns())
             except Exception:
                 pass
 
-# --- volitelně: „čas do p1..p4“ pro RTT bez lokálního store (echo z FW) ---
-def params_from_monotonic_now_us() -> Tuple[int, int, int, int]:
-    ts_us = time.monotonic_ns() // 1000
-    return base251_encode_u32(ts_us)
-
-def decode_ts_us_from_params(p1: int, p2: int, p3: int, p4: int) -> int:
-    return base251_decode_u32(p1, p2, p3, p4)
-
+# --- volitelný self-test (periodické CMD=50) ---
 if __name__ == '__main__':
+
+    class DummyHandler: 
+        def __init__(self, every=10): 
+            self.count = 0 
+            self.every = every 
+        def handle(self, message_bytes: bytes): 
+            self.count += 1    
+
     import signal
     import sys
-    import threading
-    import time
 
     try:
         from hb_serial import HoverboardSerial
@@ -305,24 +305,23 @@ if __name__ == '__main__':
     hb = HoverboardSerial()
     hb.start()
     md = MessageDispatcher(hb)
+    md.register_handler('ODM', DummyHandler()) 
+    md.register_handler('MSM', DummyHandler())
     md.start()
 
     mgr = AckNackManager(hb, md, min_interval_ms=10, ack_timeout_ms=20)
 
     stop_evt = threading.Event()
-
-    def _sigint(_sig, _frm):
-        stop_evt.set()
-
+    def _sigint(_sig, _frm): stop_evt.set()
     signal.signal(signal.SIGINT, _sigint)
 
-    CMD_TEST = 1
+    CMD_TEST = 0
     period_ns = int(55e6)  # 55 ms
     next_ns = time.monotonic_ns() + period_ns
 
     sent = ok = nacks = timeouts = 0
     rtt_sum = 0.0
-    print("[TEST] Spouštím periodické testovací příkazy CMD=50 každých 55 ms. Ctrl+C pro konec.")
+    print("[TEST] Spouštím periodické příkazy CMD=50 každých 55 ms. Ctrl+C pro konec.")
     try:
         while not stop_evt.is_set():
             now = time.monotonic_ns()
@@ -331,8 +330,8 @@ if __name__ == '__main__':
             next_ns += period_ns
 
             p1, p2, p3, p4 = params_from_monotonic_now_us()
-
             res = mgr.send_and_wait(CMD_TEST, p1, p2, p3, p4, timeout_ms=20, retries=2)
+
             sent += 1
             if res.ok:
                 ok += 1

@@ -44,7 +44,7 @@ class SerialConfig:
     write_timeout_s: float = 0.1  # write timeout
     rx_fifo_size: int = 256
     tx_fifo_size: int = 256
-    read_chunk: int = 4096        # kolik max číst naráz
+    read_chunk: int = 512        # kolik max číst naráz
     reconnect_delay_s: float = 0.5
     # Datalogger
     enable_log: bool = True

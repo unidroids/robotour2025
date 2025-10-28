@@ -71,7 +71,7 @@ if __name__ == '__main__':
     from hb_serial import HoverboardSerial
     import time
 
-    class PrintIAM:
+    class DummyHandler:
         def __init__(self, every=10):
             self.count = 0
             self.every = every
@@ -79,13 +79,14 @@ if __name__ == '__main__':
         def handle(self, message_bytes: bytes):
             self.count += 1
             if self.count % self.every == 0:
-                print(f"[ODM]#{self.count}:", message_bytes.decode(errors='ignore').strip())
+                print(f"#{self.count}:", message_bytes.decode(errors='ignore').strip())
 
     hb = HoverboardSerial()
     hb.start()
-    handler = PrintIAM()
+    handler = DummyHandler()
     md = MessageDispatcher(hb)
-    md.register_handler('ODM', handler)
+    md.register_handler('ODM', DummyHandler(10))
+    md.register_handler('MSM', DummyHandler(1))
     md.start()
 
 

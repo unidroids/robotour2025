@@ -5,7 +5,6 @@ import sys
 import threading
 import time
 
-# Import z vašeho projektu
 from ack_nack import AckNackManager, params_from_monotonic_now_us
 
 try:
@@ -17,38 +16,33 @@ except Exception as e:
 
 def main():
 
-    class DummyHandler:
-        def __init__(self, every=10):
-            self.count = 0
-            self.every = every
-
-        def handle(self, message_bytes: bytes):
-            self.count += 1
+    class DummyHandler: 
+        def __init__(self, every=10): 
+            self.count = 0 
+            self.every = every 
+        def handle(self, message_bytes: bytes): 
+            self.count += 1    
 
     hb = HoverboardSerial()
     hb.start()
     md = MessageDispatcher(hb)
-    md.register_handler('ODM', DummyHandler())
-    md.register_handler('MSM', DummyHandler())
+    md.register_handler('ODM', DummyHandler()) 
+    md.register_handler('MSM', DummyHandler())    
     md.start()
 
     mgr = AckNackManager(hb, md, min_interval_ms=10, ack_timeout_ms=20)
 
     stop_evt = threading.Event()
-
-    def _sigint(_sig, _frm):
-        stop_evt.set()
-
+    def _sigint(_sig, _frm): stop_evt.set()
     signal.signal(signal.SIGINT, _sigint)
 
-    CMD_TEST = 50
+    CMD_TEST = 1
     period_ns = int(55e6)  # 55 ms
     next_ns = time.monotonic_ns() + period_ns
 
     sent = ok = nacks = timeouts = 0
     rtt_sum = 0.0
-    print("[TEST] Spouštím periodické testovací příkazy CMD=50 každých 55 ms. Ctrl+C pro konec.")
-
+    print("[TEST] Spouštím periodické příkazy CMD=50 každých 55 ms. Ctrl+C pro konec.")
     try:
         while not stop_evt.is_set():
             now = time.monotonic_ns()
@@ -56,10 +50,9 @@ def main():
                 time.sleep((next_ns - now) / 1e9)
             next_ns += period_ns
 
-            # Timestamp do parametrů (FW vrací echo v IAM/INM)
             p1, p2, p3, p4 = params_from_monotonic_now_us()
-
             res = mgr.send_and_wait(CMD_TEST, p1, p2, p3, p4, timeout_ms=20, retries=2)
+
             sent += 1
             if res.ok:
                 ok += 1

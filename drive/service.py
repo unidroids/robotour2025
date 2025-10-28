@@ -36,8 +36,8 @@ from handlers import nack as handler_nack
 __all__ = [
     "DriveServiceConfig",
     "DriveService",
-    "STX", "MTX", "ETX",
-    "build_frame", "encode_speed", "encode_pwm",
+    #"STX", "MTX", "ETX",
+    #"build_frame", "encode_speed", "encode_pwm",
 ]
 
 
@@ -111,11 +111,14 @@ class DriveService:
         self._disp.set_default_handler(lambda m: print(f"[MSG] {m.code} {m.values}"))
 
         self._lock = threading.Lock()
+        self._ack_nack_event = threading.Event()
         self._running = False
         self._started_at = 0.0
         self._last_cmd_at = 0.0
         self._tx_ok = 0
         self._tx_fail = 0
+        self._last_ack_nack_data: Optional[Tuple[int, int, int, int, int]] = None
+        self._last_ack_nack_error: Optional[Tuple[int, int]] = None
 
     # --------------- lifecycle ---------------
     def start(self) -> str:
@@ -182,6 +185,94 @@ class DriveService:
         p3, p4 = encode_pwm(right_pwm)
         return self._send_cmd(101, p1, p2, p3, p4)
 
+
+
+    # --------------- low‑level TX ---------------
+    def received_ack_nack(self, cmd: int, p1: int, p2: int, p3: int, p4: int, ie:int, ce:int):
+        """Voláno handlery ACK/NACK při přijetí potvrzení.
+        """
+        # keep last ack/nack data
+        with self._lock:
+            self._last_ack_nack_data = (cmd, p1, p2, p3, p4)
+            self._last_ack_nack_error = (ie, ce)
+        # zde můžeme přidat kontrolu shody s posledním odeslaným příkazem
+        self._ack_nack_event.set()
+        return 
+
+    def _send_cmd(self, cmd: int, p1: int, p2: int, p3: int, p4: int) -> bool:
+        # build  frame
+        frame = build_frame(cmd, p1, p2, p3, p4)
+        # remember
+        frame_data = (cmd, p1, p2, p3, p4)
+        with self._lock:
+            self._last_ack_nack_error = None
+            self._last_ack_nack_data = None
+            self._ack_nack_event.clear()
+        # send   frame
+        ok = self._ser.send_frame(frame)
+        # update stats
+        with self._lock:
+            self._last_cmd_at = time.monotonic()
+            if ok:
+                self._tx_ok += 1
+            else:
+                self._tx_fail += 1
+                raise RuntimeError("Failed to send frame")
+        # wait for ack/nack
+        if not self._ack_nack_event.wait(timeout=0.005):
+            raise TimeoutError("No ACK/NACK received within timeout")
+
+        # check data
+        if self._last_ack_nack_error is None:
+            raise RuntimeError("ACK/NACK error data missing")
+
+        # check ACK/NACK errors
+        ie, ce = self._last_ack_nack_error
+        if ce != 0:
+            raise RuntimeError(f"Command error (CE={ce})")
+        if ie != 0:
+            # error in transport - resend frame 
+            with self._lock:
+                self._last_ack_nack_error = None
+                self._last_ack_nack_data = None
+                self._ack_nack_event.clear()
+            # send frame again
+            ok = self._ser.send_frame(frame)
+            # update stats
+            with self._lock:
+                self._last_cmd_at = time.monotonic()
+                if ok:
+                    self._tx_ok += 1
+                else:
+                    self._tx_fail += 1
+                    raise RuntimeError("Failed to re-send frame")
+
+            # wait for ack/nack after resend
+            if not self._ack_nack_event.wait(timeout=0.005):
+                raise TimeoutError("No ACK/NACK received within timeout")
+            # check error data from resend
+            if self._last_ack_nack_error is None:
+                raise RuntimeError("ACK/NACK error data missing")
+
+            # check ACK/NACK errors
+            ie, ce = self._last_ack_nack_error
+            if ce != 0:
+                raise RuntimeError(f"Command error (CE={ce})")
+            if ie != 0:
+                raise RuntimeError(f"Transport error after resend (CE={ie})")
+
+
+        # double check send data
+        if self._last_ack_nack_data is None:
+            raise RuntimeError("ACK/NACK data missing")
+        if self._last_ack_nack_data != frame_data:
+            raise RuntimeError(f"ACK/NACK data mismatch: sent {frame_data}, received {self._last_ack_nack_data}")
+        return ok
+
+
+
+
+
     # --------------- stav/diagnostika ---------------
     def get_state(self) -> Dict[str, Any]:
         rx_bytes, tx_bytes, rx_msgs, tx_frames, rx_over, tx_over, bad, too_long, unknown = self._ser.stats()
@@ -224,17 +315,6 @@ class DriveService:
             },
         }
 
-    # --------------- low‑level TX ---------------
-    def _send_cmd(self, cmd: int, p1: int, p2: int, p3: int, p4: int) -> bool:
-        frame = build_frame(cmd, p1, p2, p3, p4)
-        ok = self._ser.send_frame(frame)
-        with self._lock:
-            self._last_cmd_at = time.monotonic()
-            if ok:
-                self._tx_ok += 1
-            else:
-                self._tx_fail += 1
-        return ok
 
 
 # --- jednoduchý self‑test ---
