@@ -31,7 +31,7 @@ class MessageDispatcher:
     def __init__(self, hb_serial):
         self.hb_serial = hb_serial
         self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = None # threading.Thread(target=self._run, daemon=True)
         self._handlers: Dict[str, object] = {}  # 'GGA' -> handler
         self._messages_handled = 0
         self._messages_unknown = 0
@@ -44,12 +44,18 @@ class MessageDispatcher:
         self._handlers[typ.upper()] = handler_obj
 
     def start(self):
+        if self._thread and self._thread.is_alive():
+            return  # už běží        
         self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop_event.set()
-        self._thread.join(timeout=0.5)
+        t = self._thread
+        if t and t.is_alive():
+            t.join(timeout=0.5)
+        self._thread = None        
 
     def stats(self):
         return (self._messages_handled,

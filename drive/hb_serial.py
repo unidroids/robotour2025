@@ -64,8 +64,8 @@ class HoverboardSerial:
 
         self._stop_event = threading.Event()
         self._writer_wakeup = threading.Event()
-        self._reader_thr = threading.Thread(target=self._reader_loop, name="drive-rx", daemon=True)
-        self._writer_thr = threading.Thread(target=self._writer_loop, name="drive-tx", daemon=True)
+        self._reader_thr = None # threading.Thread(target=self._reader_loop, name="drive-rx", daemon=True)
+        self._writer_thr = None # threading.Thread(target=self._writer_loop, name="drive-tx", daemon=True)
 
         self._parser = DriveParser()
         # počitadla
@@ -95,8 +95,12 @@ class HoverboardSerial:
             self._stop_event.clear()
             self._prepare_logger()
             self._open_port()
+
+            self._reader_thr = threading.Thread(target=self._reader_loop, name="drive-rx", daemon=True)
+            self._writer_thr = threading.Thread(target=self._writer_loop, name="drive-tx", daemon=True)
             self._writer_thr.start()
             self._reader_thr.start()
+
             self._opened = True
 
     def stop(self) -> None:
@@ -120,9 +124,19 @@ class HoverboardSerial:
                     self._ser.close()
             except Exception:
                 pass
+
+            try:
+                with self._rx_fifo.mutex:
+                    self._rx_fifo.queue.clear()
+                with self._tx_fifo.mutex:
+                    self._tx_fifo.queue.clear()
+            except Exception:
+                pass
+            self._reader_thr = None
+            self._writer_thr = None
             self._ser = None
             self._close_logger()
-            self._opened = False
+            self._opened = False            
 
     # ---------------- public TX/RX API ----------------
     def send_frame(self, frame: bytes) -> bool:

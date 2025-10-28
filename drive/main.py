@@ -89,7 +89,7 @@ class DriveServer:
 
         # Zastav DriveService – pošli STOP motorům a zavři UART/dispatcher
         try:
-            self._svc.stop()
+            self._svc.stop(force=True)
         except Exception:
             pass
 

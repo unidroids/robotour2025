@@ -16,6 +16,7 @@ Pozn.: Parsování je case‑insensitive, argumenty musí být celá čísla.
 """
 from __future__ import annotations
 
+import traceback
 import json
 import socket
 from typing import Tuple
@@ -113,6 +114,7 @@ def client_thread(conn: socket.socket, addr: Tuple[str, int], svc: DriveService)
                 _send_line(conn, f"ERROR {e}")
             except Exception as e:
                 _send_line(conn, f"ERROR {type(e).__name__}: {e}")
+                _send_line(conn, traceback.format_exc())
     except Exception:
         # Tlumení chyb spojení; hlavní smyčka serveru žije dál
         pass

@@ -141,16 +141,44 @@ class DriveService:
     def stop(self) -> str:
         """Zastaví službu: pošle cmd=1 (STOP motorů) a zavře UART/dispatcher."""
         # nejprve zkus poslat STOP motorů
-        try:
-            self.motors_stop()
-        except Exception:
-            pass
+        self.motors_stop()
+
         with self._lock:
             if not self._running:
                 return "STOPPED"
             self._disp.stop()
             self._ser.stop()
             self._running = False
+        return "STOPPED"
+
+    def stop(self, force: bool = False) -> str:
+        """
+        Zastaví službu.
+        - force=False (výchozí, přes nc): nejprve STOP motorů; chyba => vyhoď výjimku (klient dostane ERROR).
+        - force=True  (Ctrl+C, shutdown): chybu STOP motorů ignoruj a pokračuj zavřením dispatcheru a UARTu.
+        """
+        stop_err = None
+        try:
+            # nejprve zkus poslat STOP motorů
+            self.motors_stop()   # vyhazuje TimeoutError/RuntimeError při selhání
+        except Exception as e:
+            stop_err = e
+            if not force:
+                # striktní režim pro vzdálené STOP – předej chybu klientovi
+                raise
+
+        # teď vždy korektně zavři infrastrukturu
+        with self._lock:
+            if not self._running:
+                # (už zastaveno – při force režimu jen dočisti; jinak vrátíme "STOPPED")
+                return "STOPPED"
+            self._disp.stop()
+            self._ser.stop()
+            self._running = False
+
+        if stop_err and force:
+            # jen informativně do logu (nepoužívej print, pokud nechceš hluk)
+            print(f"[DRIVE] stop(force=True): ignoring motors_stop error: {type(stop_err).__name__}: {stop_err}")
         return "STOPPED"
 
     def is_running(self) -> bool:
@@ -165,24 +193,36 @@ class DriveService:
         return self._send_cmd(2, 125, 125, 125, 125)
 
     def motors_stop(self) -> bool:
+        if not self.is_running():
+            return "NOT RUNNING"
         return self._send_cmd(1, 125, 125, 125, 125)
 
     def power_off(self) -> bool:
+        if not self.is_running():
+            self.start()
         return self._send_cmd(3, 125, 125, 125, 125)
 
     def halt(self) -> bool:
+        if not self.is_running():
+            self.start()
         return self._send_cmd(0, 125, 125, 125, 125)
 
     def brake(self) -> bool:  # „BREAK“ v textu, ale pojmenováno jako „brake“ kvůli klíčovému slovu
+        if not self.is_running():
+            return "NOT RUNNING"
         return self._send_cmd(5, 125, 125, 125, 125)
 
     def drive(self, max_pwm: int, left_speed: int, right_speed: int) -> bool:
+        if not self.is_running():
+            return "NOT RUNNING"
         p1, p2 = encode_pwm(max_pwm)
         p3 = encode_speed(left_speed)
         p4 = encode_speed(right_speed)
         return self._send_cmd(4, p1, p2, p3, p4)
 
     def pwm(self, left_pwm: int, right_pwm: int) -> bool:
+        if not self.is_running():
+            return "NOT RUNNING"
         p1, p2 = encode_pwm(left_pwm)
         p3, p4 = encode_pwm(right_pwm)
         return self._send_cmd(101, p1, p2, p3, p4)
