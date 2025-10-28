@@ -33,6 +33,10 @@ class MessageDispatcher:
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._handlers: Dict[str, object] = {}  # 'GGA' -> handler
+        self._messages_handled = 0
+        self._messages_unknown = 0
+        self._messages_errors = 0
+        self._messages_ignored = 0
 
     def register_handler(self, typ: str, handler_obj: object):
         if not hasattr(handler_obj, "handle") or not callable(getattr(handler_obj, "handle")):
@@ -47,6 +51,12 @@ class MessageDispatcher:
         self._stop_event.set()
         self._thread.join(timeout=0.5)
 
+    def stats(self):
+        return (self._messages_handled,
+                self._messages_unknown,
+                self._messages_errors,
+                self._messages_ignored)
+
     def _run(self):
         while not self._stop_event.is_set():
             try:
@@ -55,16 +65,20 @@ class MessageDispatcher:
                     continue
                 # raw bytes → hlavička je $ + 3 znaky
                 if len(message) < 4 or message[0] != ord('$'):
+                    self._messages_ignored += 1
                     continue
                 typ = message[1:4].decode('ascii', errors='ignore').upper()
                 handler = self._handlers.get(typ)
                 if handler:
                     handler.handle(message)
+                    self._messages_handled += 1
                 else:
                     print(f"[MessageDispatcher] unhandled message {typ} ({len(message)} bytes)")
+                    self._messages_unknown += 1
                     
             except Exception as e:
                 print(f"[MessageDispatcher] Error: {e}")
+                self._messages_errors += 1
 
 # DEMO
 if __name__ == '__main__':

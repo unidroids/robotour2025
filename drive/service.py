@@ -27,11 +27,12 @@ from typing import Any, Dict, Optional, Tuple
 
 # Naše moduly
 from hb_serial import HoverboardSerial, SerialConfig  # UART RX/TX + FIFO (náš serial.py)
-from dispatcher import MessageDispatcher, DispatcherConfig
+from dispatcher import MessageDispatcher
 
-# Handlery (zatím jen print)
-from handlers import ack as handler_ack
-from handlers import nack as handler_nack
+# Handlery
+from handlers.ack_nack_handler import AckNackHandler
+from handlers.dummy_handler import DummyHandler
+
 
 __all__ = [
     "DriveServiceConfig",
@@ -93,7 +94,6 @@ def encode_pwm(d: int) -> Tuple[int, int]:
 @dataclass(slots=True)
 class DriveServiceConfig:
     serial: SerialConfig = SerialConfig()
-    dispatcher: DispatcherConfig = DispatcherConfig()
 
 
 class DriveService:
@@ -102,15 +102,17 @@ class DriveService:
     def __init__(self, cfg: Optional[DriveServiceConfig] = None):
         self.cfg = cfg or DriveServiceConfig()
         self._ser = HoverboardSerial(self.cfg.serial)
-        self._disp = MessageDispatcher(self._ser, self.cfg.dispatcher)
-
+        self._disp = MessageDispatcher(self._ser)
+        
         # registry handlerů (prozatím základní)
-        self._disp.register_handler('IAM', handler_ack.handle)
-        self._disp.register_handler('INM', handler_nack.handle)
-        # volitelně můžeme nastavit default handler, který jen tiskne vše ostatní
-        self._disp.set_default_handler(lambda m: print(f"[MSG] {m.code} {m.values}"))
-
+        ack_nack_handler = AckNackHandler(self.received_ack_nack)
+        self._disp.register_handler('IAM', ack_nack_handler)
+        self._disp.register_handler('INM', ack_nack_handler)
+        self._disp.register_handler('ODM', DummyHandler(every=10))
+        self._disp.register_handler('MSM', DummyHandler(every=1))
+        
         self._lock = threading.Lock()
+        self._tx_mutex = threading.Lock()  # serializace TX příkazů
         self._ack_nack_event = threading.Event()
         self._running = False
         self._started_at = 0.0
@@ -199,75 +201,61 @@ class DriveService:
         self._ack_nack_event.set()
         return 
 
-    def _send_cmd(self, cmd: int, p1: int, p2: int, p3: int, p4: int) -> bool:
-        # build  frame
-        frame = build_frame(cmd, p1, p2, p3, p4)
-        # remember
-        frame_data = (cmd, p1, p2, p3, p4)
-        with self._lock:
-            self._last_ack_nack_error = None
-            self._last_ack_nack_data = None
-            self._ack_nack_event.clear()
-        # send   frame
-        ok = self._ser.send_frame(frame)
-        # update stats
-        with self._lock:
-            self._last_cmd_at = time.monotonic()
-            if ok:
-                self._tx_ok += 1
-            else:
-                self._tx_fail += 1
-                raise RuntimeError("Failed to send frame")
-        # wait for ack/nack
-        if not self._ack_nack_event.wait(timeout=0.005):
-            raise TimeoutError("No ACK/NACK received within timeout")
+    # --- JEDINÁ cesta k TX: vše sem; ostatní metody jen volají _send_cmd ---
+    def _send_cmd(self, cmd:int, p1:int, p2:int, p3:int, p4:int) -> bool:
+        # 1) SERIALIZACE VOLÁNÍ
+        if not self._tx_mutex.acquire(timeout=0.3):
+            raise RuntimeError("Timeout acquiring TX mutex")
 
-        # check data
-        if self._last_ack_nack_error is None:
-            raise RuntimeError("ACK/NACK error data missing")
-
-        # check ACK/NACK errors
-        ie, ce = self._last_ack_nack_error
-        if ce != 0:
-            raise RuntimeError(f"Command error (CE={ce})")
-        if ie != 0:
-            # error in transport - resend frame 
-            with self._lock:
-                self._last_ack_nack_error = None
-                self._last_ack_nack_data = None
+        try:
+            frame_data = (cmd, p1, p2, p3, p4)
+            frame = build_frame(cmd, p1, p2, p3, p4)
+            self._last_frame = frame
+            max_retries = 1            
+            attempt = 0
+            while True:
+                with self._lock:
+                    self._last_ack_nack_data = None
+                    self._last_ack_nack_error = None
                 self._ack_nack_event.clear()
-            # send frame again
-            ok = self._ser.send_frame(frame)
-            # update stats
-            with self._lock:
-                self._last_cmd_at = time.monotonic()
-                if ok:
-                    self._tx_ok += 1
-                else:
-                    self._tx_fail += 1
-                    raise RuntimeError("Failed to re-send frame")
 
-            # wait for ack/nack after resend
-            if not self._ack_nack_event.wait(timeout=0.005):
-                raise TimeoutError("No ACK/NACK received within timeout")
-            # check error data from resend
-            if self._last_ack_nack_error is None:
-                raise RuntimeError("ACK/NACK error data missing")
+                ok = self._ser.send_frame(frame)
+                with self._lock:
+                    self._last_cmd_at = time.monotonic()
+                    if ok: self._tx_ok += 1
+                    else:
+                        self._tx_fail += 1
+                        raise RuntimeError("Failed to send frame")
 
-            # check ACK/NACK errors
-            ie, ce = self._last_ack_nack_error
-            if ce != 0:
-                raise RuntimeError(f"Command error (CE={ce})")
-            if ie != 0:
-                raise RuntimeError(f"Transport error after resend (CE={ie})")
+                if not self._ack_nack_event.wait(timeout=0.08):
+                    raise TimeoutError(f"No ACK/NACK within 8 ms")
 
+                with self._lock:
+                    rx_data = self._last_ack_nack_data
+                    rx_errs = self._last_ack_nack_error
 
-        # double check send data
-        if self._last_ack_nack_data is None:
-            raise RuntimeError("ACK/NACK data missing")
-        if self._last_ack_nack_data != frame_data:
-            raise RuntimeError(f"ACK/NACK data mismatch: sent {frame_data}, received {self._last_ack_nack_data}")
-        return ok
+                if rx_data is None or rx_errs is None:
+                    raise RuntimeError("ACK/NACK data missing")
+
+                ie, ce = rx_errs
+                # error in transport
+                if ie != 0:
+                    if attempt < max_retries:
+                        attempt += 1
+                        continue
+                    raise RuntimeError(f"Transport error IE={ie} after {attempt} resend(s) for cmd={cmd}")
+
+                # command error
+                if ce != 0:
+                    raise RuntimeError(f"Command error CE={ce} for cmd={cmd}")
+
+                # 1:1 echo kontrola
+                if rx_data != frame_data:
+                    raise RuntimeError(f"ACK/NACK data mismatch: sent {frame_data}, received {rx_data}")
+
+                return True  # OK
+        finally:
+            self._tx_mutex.release()  # **uvolnit, aby další volání mohla pokračovat**
 
 
 
@@ -275,14 +263,35 @@ class DriveService:
 
     # --------------- stav/diagnostika ---------------
     def get_state(self) -> Dict[str, Any]:
-        rx_bytes, tx_bytes, rx_msgs, tx_frames, rx_over, tx_over, bad, too_long, unknown = self._ser.stats()
-        disp_stats = self._disp.stats()
+        # načti nové 12-prvkové stats() z _ser
+        (
+            open_failures,
+            rx_bytes,
+            tx_bytes,
+            rx_msgs,
+            tx_frames,
+            rx_over,
+            tx_over,
+            junk_count,
+            bad_char_count,
+            cs_error_count,
+            too_long_count,
+            sentences_parsed,
+        ) = self._ser.stats()
+
+        (   dispatcher_handled,
+            dispatcher_unknown,
+            dispatcher_errors,
+            dispatcher_ignored,
+        ) = self._disp.stats()
+
         with self._lock:
             running = self._running
             started_at = self._started_at
             last_cmd_at = self._last_cmd_at
             tx_ok = self._tx_ok
             tx_fail = self._tx_fail
+
         return {
             "service": "DRIVE",
             "status": "RUNNING" if running else "STOPPED",
@@ -293,6 +302,7 @@ class DriveService:
             "serial": {
                 "device": self.cfg.serial.device,
                 "baud": self.cfg.serial.baudrate,
+                "open_failures": open_failures,
                 "rx_bytes": rx_bytes,
                 "tx_bytes": tx_bytes,
                 "rx_msgs": rx_msgs,
@@ -300,19 +310,19 @@ class DriveService:
                 "rx_overflows": rx_over,
                 "tx_overflows": tx_over,
                 "parser": {
-                    "bad_lines": bad,
-                    "too_long_lines": too_long,
-                    "unknown_codes": unknown,
+                    "junk": junk_count,
+                    "bad_char": bad_char_count,
+                    "cs_error": cs_error_count,
+                    "too_long": too_long_count,
+                    "sentences_parsed": sentences_parsed,
                 },
             },
             "dispatcher": {
-                "processed": disp_stats.processed,
-                "unhandled": disp_stats.unhandled,
-                "handler_errors": disp_stats.handler_errors,
-                "per_code": dict(disp_stats.per_code),
-                "last_error": disp_stats.last_error,
-                "started_at_mono": disp_stats.started_at,
-            },
+                "handled": dispatcher_handled,
+                "unknown": dispatcher_unknown,
+                "errors": dispatcher_errors,
+                "ignored": dispatcher_ignored,
+            },  
         }
 
 
@@ -322,9 +332,8 @@ if __name__ == "__main__":
     svc = DriveService()
     print("PING:", svc.ping())
     print("START:", svc.start())
+    time.sleep(2)
     print("STATE:", svc.get_state())
-    print("HALT:", svc.halt())
-    print("DRIVE:", svc.drive(120, 0, 0))
-    print("PWM:", svc.pwm(100, 100))
+    time.sleep(2)
     print("STOP:", svc.stop())
-    print("STATE:", svc.get_state())
+
