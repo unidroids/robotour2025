@@ -372,8 +372,8 @@ if __name__ == "__main__":
     svc = DriveService()
     print("PING:", svc.ping())
     print("START:", svc.start())
-    time.sleep(2)
+    time.sleep(5)
     print("STATE:", svc.get_state())
-    time.sleep(2)
+    time.sleep(5)
     print("STOP:", svc.stop())
 
