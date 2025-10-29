@@ -13,20 +13,17 @@ from data.nav_fusion_data import NavFusionData
 
 from geo_utils import heading_gnss_to_enu, lla_to_ecef, ecef_to_enu
 from near_waypoint import select_near_point
-from motion_controller import MotionController2D, ControllerConfig, SpeedMode
 
-from pilot_log import PilotLog
-from pilot_fsm import NavigatorFSM, FsmConfig, NavQuality, NavigatorState
 
 @dataclass
 class PilotState:
     mode: str = "IDLE"                 # IDLE | NAVIGATE | GOAL_REACHED | GOAL_NOT_REACHED
     near_case: str = "N/A"             # TWO_INTERSECTIONS | TANGENT | NO_INTERSECTION | N/A
-    dist_to_goal_m: float = 0.0
-    cross_track_m: float = 0.0         # kolmá vzdálenost k přímce S–E (telemetrie)
-    left_pwm: int = 0
-    right_pwm: int = 0
-    heading_enu_deg: float = 0.0
+    #dist_to_goal_m: float = 0.0
+    #cross_track_m: float = 0.0         # kolmá vzdálenost k přímce S–E (telemetrie)
+    #left_pwm: int = 0
+    #right_pwm: int = 0
+    #heading_enu_deg: float = 0.0
     last_note: str = ""
     ts_mono: float = 0.0               # monotonic timestamp poslední aktualizace
 
@@ -82,7 +79,7 @@ class Pilot:
     def stop(self):
         with self._lock:
             if not self.running:
-                return "NOT_RUNNING"
+                return "OK WAS NOT RUNNING"
             self._stop_event.set()
             if self._thread:
                 self._thread.join(timeout=2.0)
@@ -96,11 +93,7 @@ class Pilot:
                 self.gnss_client = None
                 self._initialized = False
                 self.running = False
-                if self._log:
-                    self._log.event("IDLE", "IDLE", "Service stopped")
-                    self._log.close()
-                    self._log = None
-                self._set_state(mode="IDLE", near_case="N/A", left_pwm=0, right_pwm=0, last_note="SERVICE STOPPED")
+                self._set_state(mode="IDLE", near_case="N/A", last_note="SERVICE STOPPED")
                 print("[SERVICE] STOPPED")
             return "OK"
 
@@ -112,7 +105,7 @@ class Pilot:
 
     @staticmethod
     def _wrap_angle_deg(a: float) -> float:
-        """wrap to [-180,180)"""
+        """wrap to [-180,180]"""
         a = (a + 180.0) % 360.0 - 180.0
         return a
 
@@ -134,61 +127,35 @@ class Pilot:
         print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) "
               f"to (lat={E_lat}, lon={E_lon}) within radius {GOAL_RADIUS}m")
 
-        ctrl_cfg = ControllerConfig(
-            v_max_debug_mps=0.5,
-            v_max_normal_mps=1.5,
-            omega_max_dps=90.0,
-            max_pwm=40,
-            deadband_pwm=15,
-            slow_down_dist_m=5.0,
-            k_heading_to_omega=0.9,
-            v_scale=0.6,
-        )
-        ctrl = MotionController2D(cfg=ctrl_cfg, mode=SpeedMode.DEBUG)
-        L_NEAR = 2.0
-
-        fsm = NavigatorFSM(FsmConfig(
-            hacc_ready_m=1.5,
-            acquire_heading_acc_max_deg=40.0,
-            acquire_heading_window_deg=15.0,
-            heading_uncertain_deg=20.0,
-            t_stable_s=0.7,
-            t_hold_s=0.3,
-            v_max_mps=0.5,
-            omega_max_dps=90.0,
-            omega_acquire_gain=2.0,
-            acquire_spin_dir="RIGHT",
-            acquire_pwm_spin=25,
-            acquire_pwm_prespin=25,
-            acquire_pwm_drive=28,
-        ))
-
-        self._log = PilotLog(S_lat, S_lon, E_lat, E_lon, GOAL_RADIUS, ctrl_cfg, str(ctrl.mode), version=self.VERSION)
+        L_NEAR = 1.0  # lookahead pro near point (m)
+        #self._log = PilotLog(S_lat, S_lon, E_lat, E_lon, GOAL_RADIUS, ctrl_cfg, str(ctrl.mode), version=self.VERSION)
         state = "NAVIGATE"
         last_loop = time.monotonic()
-        self._log.event(state, fsm.state.name, "Navigation loop started")
-        self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation loop started")
-        prev_fsm_state = fsm.state
+        #self._log.event(state, fsm.state.name, "Navigation loop started")
+        #self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation loop started")
 
         while not self._stop_event.is_set():
             loop_start = time.monotonic()
             try:
-                nav: Optional[NavFusionData] = gnss.read_nav_fusion_data()
+                # 1) Načti data GNSS
+                nav: Optional[NavFusionData] = gnss.read_nav_fusion_data() # blokuj max 1s
                 loop_dt_ms = (loop_start - last_loop) * 1000.0
                 dt_s = max((loop_start - last_loop), 1e-3)
                 last_loop = loop_start
-
                 if not nav:
-                    drive.send_pwm(0, 0)
-                    self._log.event(state, fsm.state.name, "No nav data")
-                    time.sleep(0.2)
+                    drive.send_break()
+                    print("[PILOT] No nav data -> sending BREAK")
                     continue
+                
+                # 2) Ověř zda jsi v cíli
+                
 
-                heading_gnss = getattr(nav, "heading", None)
-                if heading_gnss is None:
-                    heading_gnss = getattr(nav, "motHeading", None)
-                if heading_gnss is None:
-                    heading_gnss = getattr(nav, "vehHeading", None)
+                # 3) Zjisti near point
+
+                # 4) Spočti heading k near pointu
+
+                # 5)  
+                heading_gnss = nav.heading
                 theta_enu = heading_gnss_to_enu(float(heading_gnss or 0.0))
 
                 Ex, Ey, _ = ecef_to_enu(*lla_to_ecef(E_lat, E_lon), nav.lat, nav.lon, 0.0)

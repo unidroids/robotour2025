@@ -15,7 +15,9 @@ TCP_TO_SERIAL_LOG = os.path.join(BASE_DIR, "tcp_to_serial.log")
 def read_serial(ser, conn, log_file_handle):
     try:
         while True:
-            data = ser.read(1024)
+            data = ser.read(1)
+            if ser.in_waiting:
+                data += ser.read(ser.in_waiting)
             if data:
                 try:
                     conn.sendall(data)
@@ -55,7 +57,7 @@ def main():
             serial_to_tcp_log = open(SERIAL_TO_TCP_LOG, "wb")
             tcp_to_serial_log = open(TCP_TO_SERIAL_LOG, "wb")
 
-            ser = serial.Serial(DEVICE, BAUD, timeout=0.1)
+            ser = serial.Serial(DEVICE, BAUD, timeout=0.05)
 
             t1 = threading.Thread(
                 target=read_serial, args=(ser, conn, serial_to_tcp_log), daemon=True)

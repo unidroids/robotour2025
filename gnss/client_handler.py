@@ -1,19 +1,20 @@
 # client_handler.py
 import sys
 import json
+from service import GnssService
 from builders import build_odo
 from builders import build_perfect
 from builders import build_prio_on, build_prio_off
 
 
-def ensure_gnss(f, service):
+def ensure_gnss(f, service: GnssService):
     if not service.gnss:
         f.write(b"ERR: GNSS not started, use START first\n")
         f.flush()
         return False
     return True
 
-def client_thread(sock, addr, service):
+def client_thread(sock, addr, service: GnssService):
     sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")

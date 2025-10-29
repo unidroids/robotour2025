@@ -1,159 +1,245 @@
-# near_waypoint.py
+# near_waypoint_class.py
 # -----------------------------------------------------------------------------
-# Near-point selektor podle domluvené specifikace:
+# Objektová varianta "near waypoint" podle zadání.
+# 
 # - Pracujeme s PŘÍMKOU procházející S–E (bez ořezu na segment).
-# - Hledáme průsečík(y) této přímky s kružnicí C(R, L_near):
-#     2 průsečíky  -> vybereme bod "blíže k E" (větší projekce na směr S→E)
-#     1 průsečík   -> vezmeme tečný bod
-#     0 průsečíků  -> vrátíme NO_INTERSECTION (Pilot/FSM => GOAL_NOT_REACHED)
-#
-# Převody LLA<->ECEF<->ENU jsou přesunuty do geo_utils.py.
+# - V rámci __init__ se uloží S, E (včetně ECEF cache). L_near_m je volitelný.
+# - Vypočítává se:
+#     * signed vzdálenost k cíli (m): (L_seg - t_proj),
+#       kde t_proj je projekce z R na směr S→E v ENU(R).
+#       Je záporná, pokud průmět leží ZA E (ve směru od S k E dále).
+#     * heading k nejbližšímu průsečíku (pokud existuje)
+#       → vracíme v GNSS konvenci: 0°=Sever, 90°=Východ.
+#     * case: "TWO_INTERSECTIONS" | "TANGENT" | None
+#       (None znamená, že průsečík neexistuje NEBO L_near_m nebyl zadán.)
+# - Metoda update(lat, lon) přepočte výše uvedené hodnoty.
+# - S/E je možné udržovat v ECEF pro drobnou optimalizaci.
+# 
+# Pozn.: Převody LLA<->ECEF<->ENU jsou v geo_utils.py (dodané uživatelem).
 # -----------------------------------------------------------------------------
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Tuple, Optional, Literal
+from typing import Optional, Literal
 import math
 
 from geo_utils import (
     lla_to_ecef, ecef_to_lla,
     ecef_to_enu, enu_to_ecef,
+    heading_enu_to_gnss,
 )
 
-NearCase = Literal["TWO_INTERSECTIONS", "TANGENT", "NO_INTERSECTION"]
+NearCase = Literal["TWO_INTERSECTIONS", "TANGENT"]
 
 @dataclass
-class NearPointResult:
-    case: NearCase
-    near_lat: Optional[float]
-    near_lon: Optional[float]
-    near_x_m: Optional[float]  # ENU (origin = R), for debugging/telemetrie
-    near_y_m: Optional[float]  # ENU (origin = R)
-    d_perp_m: float            # vzdálenost z R na PŘÍMKU(S–E)
-    chosen_t_along: Optional[float]  # projekce podél S'->E' (vztaženo k S')
+class NearState:
+    # Výstupy výpočtu pro aktuální (R_lat, R_lon)
+    distance_to_goal_m: float                    # podepsaná vzdálenost k E
+    heading_to_near_gnss_deg: Optional[float]    # 0=N, 90=E; None pokud není průsečík
+    case: Optional[NearCase]                     # None pokud není průsečík
+    # (volitelně užitečná telemetrie)
+    near_lat: Optional[float] = None
+    near_lon: Optional[float] = None
+    near_x_m: Optional[float] = None             # ENU(R)
+    near_y_m: Optional[float] = None             # ENU(R)
+    d_perp_m: Optional[float] = None             # kolmice z R na přímku S–E
 
-def select_near_point(
-    S_lat: float, S_lon: float,
-    E_lat: float, E_lon: float,
-    R_lat: float, R_lon: float,
-    L_near_m: float,
-    #eps_m: float = 1e-6,
-    eps_m: float = 2e-3,
-) -> NearPointResult:
-    """
-    Najde průsečík(y) PŘÍMKY S–E s kružnicí C(R, L_near) v ENU(R),
-    vybere near bod (blíže k E) a převede jej do LLA.
 
-    Doctests (geometrické sanity-checky s tolerancí):
+class NearWaypoint:
+    def __init__(
+        self,
+        S_lat: float, S_lon: float,
+        E_lat: float, E_lon: float,
+        L_near_m: Optional[float] = 1.0,
+        eps_m: float = 2e-3,
+    ) -> None:
+        self.S_lat = float(S_lat)
+        self.S_lon = float(S_lon)
+        self.E_lat = float(E_lat)
+        self.E_lon = float(E_lon)
+        self.L_near_m = float(L_near_m) if L_near_m is not None else None
+        self.eps_m = float(eps_m)
 
-    >>> # 1) Dvě průsečnice: vodorovná přímka přes R, E "vpravo". Near = (+L, 0).
-    >>> R = (50.0, 14.0)
-    >>> res = select_near_point(S_lat=R[0], S_lon=R[1]-0.0002,
-    ...                         E_lat=R[0], E_lon=R[1]+0.0002,
-    ...                         R_lat=R[0], R_lon=R[1],
-    ...                         L_near_m=1.0)
-    >>> res.case
-    'TWO_INTERSECTIONS'
-    >>> abs((res.near_x_m or 0.0) - 1.0) < 1e-3 and abs((res.near_y_m or 0.0) - 0.0) < 1e-3
-    True
+        # ECEF cache pro S a E (optimalizace)
+        self._S_ecef = lla_to_ecef(self.S_lat, self.S_lon, 0.0)
+        self._E_ecef = lla_to_ecef(self.E_lat, self.E_lon, 0.0)
 
-    >>> # 2) Tečna: přímka paralelní s x, posunutá o 1 m v +y; near = (0, +1)
-    >>> res2 = select_near_point(S_lat=R[0]+(1.0/111_132.954), S_lon=R[1]-0.0002,
-    ...                          E_lat=R[0]+(1.0/111_132.954), E_lon=R[1]+0.0002,
-    ...                          R_lat=R[0], R_lon=R[1],
-    ...                          L_near_m=1.0)
-    >>> res2.case
-    'TANGENT'
-    >>> abs((res2.near_x_m or 0.0) - 0.0) < 2e-3 and abs((res2.near_y_m or 0.0) - 1.0) < 2e-3
-    True
+        # Místo pro poslední stav
+        self.state: Optional[NearState] = None
 
-    >>> # 3) Bez průsečíku: přímka ve vzdálenosti 1.2 m od R
-    >>> res3 = select_near_point(S_lat=R[0]+(1.2/111_132.954), S_lon=R[1]-0.0002,
-    ...                          E_lat=R[0]+(1.2/111_132.954), E_lon=R[1]+0.0002,
-    ...                          R_lat=R[0], R_lon=R[1],
-    ...                          L_near_m=1.0)
-    >>> res3.case
-    'NO_INTERSECTION'
-    """
-    # 1) Převod S,E do ENU s referencí v R (robot)
-    Sx, Sy, _ = ecef_to_enu(*lla_to_ecef(S_lat, S_lon), R_lat, R_lon, 0.0)
-    Ex, Ey, _ = ecef_to_enu(*lla_to_ecef(E_lat, E_lon), R_lat, R_lon, 0.0)
+    # -------------------------------
+    # Vnitřní výpočet pro dané R
+    # -------------------------------
+    def _compute(self, R_lat: float, R_lon: float) -> NearState:
+        # S, E do ENU se vztahem v R
+        Sx, Sy, _ = ecef_to_enu(*self._S_ecef, R_lat, R_lon, 0.0)
+        Ex, Ey, _ = ecef_to_enu(*self._E_ecef, R_lat, R_lon, 0.0)
 
-    # 2) Parametrizace přímky S'->E' v ENU (2D)
-    vx, vy = Ex - Sx, Ey - Sy
-    L_seg = math.hypot(vx, vy)
-    if L_seg < 1e-12:
-        # Degenerace: S≈E -> přímka špatně definovaná; vracíme NO_INTERSECTION
-        return NearPointResult(
-            case="NO_INTERSECTION",
-            near_lat=None, near_lon=None,
-            near_x_m=None, near_y_m=None,
-            d_perp_m=math.hypot(Sx, Sy),
-            chosen_t_along=None,
-        )
-    # normovaný směr
-    vx /= L_seg
-    vy /= L_seg
+        # směr přímky S->E
+        vx, vy = Ex - Sx, Ey - Sy
+        L_seg = math.hypot(vx, vy)
+        if L_seg < 1e-12:
+            # degenerace: S≈E ⇒ přímka nedef.
+            # vzdálenost k cíli = vzdálenost R k E (v ENU ~ k S)
+            dist_goal = math.hypot(Ex, Ey)  # ~ vzdálenost k bodu E
+            return NearState(
+                distance_to_goal_m=dist_goal,
+                heading_to_near_gnss_deg=None,
+                case=None,
+                near_lat=None, near_lon=None,
+                near_x_m=None, near_y_m=None,
+                d_perp_m=None,
+            )
 
-    # 3) Pata kolmice Q z R=(0,0) na přímku S'+t*v (projekce -S' na v)
-    t_q = (-(Sx * vx + Sy * vy))
-    Qx = Sx + t_q * vx
-    Qy = Sy + t_q * vy
-    d_perp = math.hypot(Qx, Qy)
+        # normalizace směru
+        vx /= L_seg
+        vy /= L_seg
 
-    # 4) Průsečík(y) s kružnicí x^2 + y^2 = L^2
-    Lr = float(L_near_m)
-    eps = float(eps_m)
-    if d_perp > Lr + eps:
-        # žádný průsečík
-        return NearPointResult(
-            case="NO_INTERSECTION",
-            near_lat=None, near_lon=None,
-            near_x_m=None, near_y_m=None,
-            d_perp_m=d_perp,
-            chosen_t_along=None,
-        )
-    elif abs(d_perp - Lr) <= eps:
-        # tečna: near = Q
-        nx, ny = Qx, Qy
-        nx_ecef, ny_ecef, nz_ecef = enu_to_ecef(nx, ny, 0.0, R_lat, R_lon, 0.0)
-        nlat, nlon, _ = ecef_to_lla(nx_ecef, ny_ecef, nz_ecef)
-        t_along = ((nx - Sx) * vx + (ny - Sy) * vy)
-        return NearPointResult(
-            case="TANGENT",
-            near_lat=nlat, near_lon=nlon,
-            near_x_m=nx, near_y_m=ny,
-            d_perp_m=d_perp,
-            chosen_t_along=t_along,
-        )
-    else:
-        # 2 průsečíky: N1 = Q + delta*v, N2 = Q - delta*v
-        delta = math.sqrt(max(0.0, Lr * Lr - d_perp * d_perp))
-        n1x, n1y = Qx + delta * vx, Qy + delta * vy
-        n2x, n2y = Qx - delta * vx, Qy - delta * vy
-        # Vyber "blíže k E" => větší projekce na směr v (od S')
-        t1 = ((n1x - Sx) * vx + (n1y - Sy) * vy)
-        t2 = ((n2x - Sx) * vx + (n2y - Sy) * vy)
-        if t1 >= t2:
-            nx, ny, t_along = n1x, n1y, t1
+        # pata kolmice Q z R(0,0) na přímku S + t*v
+        t_q = (-(Sx * vx + Sy * vy))
+        Qx = Sx + t_q * vx
+        Qy = Sy + t_q * vy
+        d_perp = math.hypot(Qx, Qy)
+
+        # Podepsaná vzdálenost k cíli (E) podél přímky:
+        #   t_q je "kolmá projekce" R na směr od S; E je v parametru L_seg.
+        distance_to_goal_m = (L_seg - t_q)
+
+        # Pokud L_near není zadán, nepočítáme průsečík (case=None)
+        if self.L_near_m is None:
+            return NearState(
+                distance_to_goal_m=distance_to_goal_m,
+                heading_to_near_gnss_deg=None,
+                case=None,
+                near_lat=None, near_lon=None,
+                near_x_m=None, near_y_m=None,
+                d_perp_m=d_perp,
+            )
+
+        Lr = self.L_near_m
+        eps = self.eps_m
+
+        if d_perp > Lr + eps:
+            # žádný průsečík
+            return NearState(
+                distance_to_goal_m=distance_to_goal_m,
+                heading_to_near_gnss_deg=None,
+                case=None,
+                near_lat=None, near_lon=None,
+                near_x_m=None, near_y_m=None,
+                d_perp_m=d_perp,
+            )
+        elif abs(d_perp - Lr) <= eps:
+            # tečna: near = Q
+            nx, ny = Qx, Qy
+            nx_ecef, ny_ecef, nz_ecef = enu_to_ecef(nx, ny, 0.0, R_lat, R_lon, 0.0)
+            nlat, nlon, _ = ecef_to_lla(nx_ecef, ny_ecef, nz_ecef)
+            heading_enu = math.degrees(math.atan2(ny, nx)) % 360.0
+            heading_gnss = heading_enu_to_gnss(heading_enu)
+            return NearState(
+                distance_to_goal_m=distance_to_goal_m,
+                heading_to_near_gnss_deg=heading_gnss,
+                case="TANGENT",
+                near_lat=nlat, near_lon=nlon,
+                near_x_m=nx, near_y_m=ny,
+                d_perp_m=d_perp,
+            )
         else:
-            nx, ny, t_along = n2x, n2y, t2
+            # 2 průsečíky: N1 = Q + delta*v, N2 = Q - delta*v
+            delta = math.sqrt(max(0.0, Lr * Lr - d_perp * d_perp))
+            n1x, n1y = Qx + delta * vx, Qy + delta * vy
+            n2x, n2y = Qx - delta * vx, Qy - delta * vy
+            # Vybereme ten "blíže k E" => větší projekce na v (od S)
+            t1 = ((n1x - Sx) * vx + (n1y - Sy) * vy)
+            t2 = ((n2x - Sx) * vx + (n2y - Sy) * vy)
+            if t1 >= t2:
+                nx, ny = n1x, n1y
+            else:
+                nx, ny = n2x, n2y
 
-        nx_ecef, ny_ecef, nz_ecef = enu_to_ecef(nx, ny, 0.0, R_lat, R_lon, 0.0)
-        nlat, nlon, _ = ecef_to_lla(nx_ecef, ny_ecef, nz_ecef)
+            nx_ecef, ny_ecef, nz_ecef = enu_to_ecef(nx, ny, 0.0, R_lat, R_lon, 0.0)
+            nlat, nlon, _ = ecef_to_lla(nx_ecef, ny_ecef, nz_ecef)
+            heading_enu = math.degrees(math.atan2(ny, nx)) % 360.0
+            heading_gnss = heading_enu_to_gnss(heading_enu)
+            return NearState(
+                distance_to_goal_m=distance_to_goal_m,
+                heading_to_near_gnss_deg=heading_gnss,
+                case="TWO_INTERSECTIONS",
+                near_lat=nlat, near_lon=nlon,
+                near_x_m=nx, near_y_m=ny,
+                d_perp_m=d_perp,
+            )
 
-        return NearPointResult(
-            case="TWO_INTERSECTIONS",
-            near_lat=nlat, near_lon=nlon,
-            near_x_m=nx, near_y_m=ny,
-            d_perp_m=d_perp,
-            chosen_t_along=t_along,
-        )
+    # -------------------------------
+    # Veřejné API
+    # -------------------------------
+    def update(self, R_lat: float, R_lon: float) -> (int, int):
+        """
+        Přepočte a vrátí aktuální stav pro polohu (R_lat, R_lon).
+        Hodnoty jsou také dostupné jako self.state.
+        """
+        s = self._compute(R_lat, R_lon)
+        self.state = s
+        return (s.distance_to_goal_m, s.heading_to_near_gnss_deg)        
+
 
 # -------------------------------
-# CLI/doctest runner
+# Jednoduché testy / ukázky použití
 # -------------------------------
 if __name__ == "__main__":
-    import doctest
-    n_failed, n_tests = doctest.testmod(optionflags=doctest.ELLIPSIS)
-    print(f"[near_waypoint] doctest: {n_tests} tests, {n_failed} failed")
+    def show(label: str, st: NearState):
+        print(f"\n[{label}]\n"
+              f"  distance_to_goal_m : {st.distance_to_goal_m:.3f}\n"
+              f"  heading_gnss_deg   : {st.heading_to_near_gnss_deg}\n"
+              f"  case               : {st.case}\n"
+              f"  near(ENU)          : ({st.near_x_m}, {st.near_y_m})\n"
+              f"  near(LL)           : ({st.near_lat}, {st.near_lon})\n"
+              f"  d_perp_m           : {st.d_perp_m}")
+
+    # Společná základna
+    R = (50.000000, 14.000000)
+    L = 1.0  # L_near_m
+
+    # 0) DVA PRŮSEČÍKY: vodorovná přímka skrz R, E napravo
+    cls = NearWaypoint(S_lat=R[0], S_lon=R[1],
+                       E_lat=R[0], E_lon=R[1]+0.0002,
+                       L_near_m=L)
+    st = cls.update(R_lat=R[0], R_lon=R[1])
+    show("na startu", cls.state)    
+    print(st)
+
+
+    # 1) DVA PRŮSEČÍKY: vodorovná přímka skrz R, E napravo
+    cls = NearWaypoint(S_lat=R[0], S_lon=R[1]-0.0002,
+                       E_lat=R[0], E_lon=R[1]+0.0002,
+                       L_near_m=L)
+    st = cls.update(R_lat=R[0], R_lon=R[1])
+    show("two intersections", cls.state)
+    print(st)
+
+    # 2) TEČNA: přímka posunutá o +1 m v osy ENU-y (Sever)
+    cls2 = NearWaypoint(S_lat=R[0] + (1.0/111_132.954), S_lon=R[1]-0.0002,
+                        E_lat=R[0] + (1.0/111_132.954), E_lon=R[1]+0.0002,
+                        L_near_m=L)
+    st2 = cls2.update(R_lat=R[0], R_lon=R[1])
+    show("tangent", cls2.state)
+    print(st2)
+
+    # 3) ŽÁDNÝ PRŮSEČÍK: přímka 1.2 m od R
+    cls3 = NearWaypoint(S_lat=R[0] + (1.2/111_132.954), S_lon=R[1]-0.0002,
+                        E_lat=R[0] + (1.2/111_132.954), E_lon=R[1]+0.0002,
+                        L_near_m=L)
+    st3 = cls3.update(R_lat=R[0], R_lon=R[1])
+    show("no intersection", cls3.state)
+    print(st3)
+
+    # 4) ZÁPORNÁ vzdálenost k cíli: R leží ZA E (projekce za E ve směru S→E)
+    #    Vezmeme přímku východním směrem a přesuneme R ~2 m za E.
+    S = (50.0, 14.0)
+    E = (50.0, 14.0 + 0.00002)  # cca ~1.3–1.5 m podle zem. šířky
+    tester = NearWaypoint(S_lat=S[0], S_lon=S[1], E_lat=E[0], E_lon=E[1], L_near_m=L)
+    # Posun R o další +0.00002 stupně východně od E (tj. projekce > L_seg)
+    R_past = (50.0, 14.0 + 0.00004)
+    st4 = tester.update(R_lat=R_past[0], R_lon=R_past[1])
+    show("negative distance (past goal)", tester.state)
+    print(st4)
