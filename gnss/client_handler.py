@@ -1,6 +1,7 @@
 # client_handler.py
 import sys
 import json
+import socket
 from service import GnssService
 from builders import build_odo
 from builders import build_perfect

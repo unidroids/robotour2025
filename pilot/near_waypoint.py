@@ -182,14 +182,14 @@ class NearWaypoint:
     # -------------------------------
     # Veřejné API
     # -------------------------------
-    def update(self, R_lat: float, R_lon: float) -> tuple[float, Optional[float]]:
+    def update(self, R_lat: float, R_lon: float) -> tuple[float, float, Optional[float]]:
         """
         Přepočte a vrátí aktuální stav pro polohu (R_lat, R_lon).
         Hodnoty jsou také dostupné jako self.state.
         """
         s = self._compute(R_lat, R_lon)
         self.state = s
-        return (s.distance_to_goal_m, s.heading_to_near_gnss_deg)        
+        return (s.distance_to_goal_m, s.abs_distance_to_goal_m, s.heading_to_near_gnss_deg)        
 
 
 # -------------------------------

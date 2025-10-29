@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 import time
 import traceback
-import math
 from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
 
@@ -12,8 +11,20 @@ from gnss_client import GnssClient
 from data.nav_fusion_data import NavFusionData
 
 from geo_utils import heading_gnss_to_enu, lla_to_ecef, ecef_to_enu
-from near_waypoint import select_near_point
+from near_waypoint import NearWaypoint
 from pp_velocity import PPVelocityPlanner
+
+# ---------------------- util -----------------------------
+
+@staticmethod
+def _wrap_angle_deg(a: float) -> float:
+    """wrap to [-180,180]"""
+    a = (a + 180.0) % 360.0 - 180.0
+    return a
+
+@staticmethod
+def _sign(x: float) -> int:
+    return (x > 0) - (x < 0)  # -1, 0, +1      
 
 @dataclass
 class PilotState:
@@ -101,13 +112,7 @@ class Pilot:
         if not self.running or not self._initialized:
             raise RuntimeError("[PILOT SERVICE] Service is not running. Call START first.")
 
-    # ---------------------- util -----------------------------
-
-    @staticmethod
-    def _wrap_angle_deg(a: float) -> float:
-        """wrap to [-180,180]"""
-        a = (a + 180.0) % 360.0 - 180.0
-        return a
+  
 
     # ---------------------- navigační vlákno -----------------
 
@@ -148,34 +153,44 @@ class Pilot:
         while not self._stop_event.is_set():
             loop_start = time.monotonic()
             try:
-                # 1) Načti data GNSS
-                nav: Optional[NavFusionData] = gnss.read_nav_fusion_data() # blokuj max 1s
                 loop_dt_ms = (loop_start - last_loop) * 1000.0
                 dt_s = max((loop_start - last_loop), 1e-3)
                 last_loop = loop_start
+
+                # 1) Načti data GNSS
+                nav: Optional[NavFusionData] = gnss.read_nav_fusion_data() # blokuj max 1s
                 if not nav:
                     drive.send_break()
                     print("[PILOT] No nav data -> sending BREAK")
                     continue
-                
+                print(f"[PILOT] Nav data: lat={nav.lat}, lon={nav.lon}, heading={nav.heading}, speed_m={nav.speed}")
+
                 # 2) Zjisti near point
-                (distance_to_goal_m, heading_to_near_gnss_deg) = nearwaypoint.update(R_lat=nav.lat, R_lon=nav.lon)
+                (distance_to_goal_m, abs_distance_to_goal_m, heading_to_near_gnss_deg) = nearwaypoint.update(R_lat=nav.lat, R_lon=nav.lon)
 
                 # 3) Ověř zda jsi v cíli
-                if distance_to_goal_m <= GOAL_RADIUS:
-                    print("[PILOT] Goal reached -> stop")
+                if abs_distance_to_goal_m <= GOAL_RADIUS:
+                    print(f"[PILOT] Goal reached -> stop. Distance to goal: {distance_to_goal_m:.2f} m")
                     drive.send_break()
                     self._set_state(mode="GOAL_REACHED", last_note="Goal reached")
                     break
                 
-                # 4) Spočti chybu heading robota vůči near point
+                # 4) Ověř zda existje near point
+                if not heading_to_near_gnss_deg:
+                    print(f"[PILOT] No near point found -> sending BREAK. Distance to goal: {abs_distance_to_goal_m:.2f} m")
+                    drive.send_break()
+                    self._set_state(mode="NAVIGATE", near_case="NO_INTERSECTION", last_note="No near point found")
+                    break
+
+                # 5) Spočti chybu heading robota vůči near point
                 heading_error = _wrap_angle_deg(heading_to_near_gnss_deg - nav.heading) # ccw positive
 
-                # 5) Vypočti nové rychlosti kola
+                # 6) Vypočti nové rychlosti kola
+                left_speed, right_speed = 0.0, 0.0
                 if (abs(heading_error) > 90):
                     # turn in place
-                    s = sign(heading_error)
-                    left_speed, left_speed = -30 * s, 30 * s
+                    s = _sign(heading_error)
+                    left_speed, right_speed = -30 * s, 30 * s
                 elif abs(heading_error) > 30:
                     # slow turn one wheel stopped
                     if heading_error > 0:
@@ -184,11 +199,12 @@ class Pilot:
                         left_speed, right_speed = 30, 0    # doprava
                 else:
                     # PP velocity planning
-                    left_speed, left_speed = pp_velocity.calculate(alpha_deg=heading_error)
+                    left_speed, right_speed = pp_velocity.calculate(alpha_deg=heading_error)
 
-                # 6) Odešli rychlosti kol do drive služby
+                # 7) Odešli rychlosti kol do drive služby
                 pwm = 100 # pevné PWM pro nyní  (left_speed + right_speed)
                 result = drive.send_drive(pwm, left_speed, right_speed)
+                print(f"[PILOT] Drive command sent: PWM={pwm}, left_speed={left_speed} cm/s, right_speed={right_speed} cm/s")
                 # TODO: check result?
 
             except Exception as e:
@@ -223,3 +239,20 @@ class Pilot:
                 daemon=True
             )
             self._thread.start()
+
+if __name__ == "__main__":
+    print(f"Sign test {_sign(-30)} {_sign(0)} {_sign(30)}") 
+    pilot = Pilot()
+    pilot.start()
+    pilot.navigate(
+        start_lat=50.0616314,
+        start_lon=14.599517,
+        goal_lat=50.0615758,
+        goal_lon=14.5996074+0.0004,
+        goal_radius=5.0
+    )
+    try:
+        while True:
+            time.sleep(1.0)
+    except KeyboardInterrupt:
+        pilot.stop()
