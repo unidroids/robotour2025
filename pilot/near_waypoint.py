@@ -34,7 +34,8 @@ NearCase = Literal["TWO_INTERSECTIONS", "TANGENT"]
 @dataclass
 class NearState:
     # Výstupy výpočtu pro aktuální (R_lat, R_lon)
-    distance_to_goal_m: float                    # podepsaná vzdálenost k E
+    distance_to_goal_m: float                    # podepsaná vzdálenost k E (projekce na S→E)
+    abs_distance_to_goal_m: float                # skutečná euklidovská vzdálenost R→E
     heading_to_near_gnss_deg: Optional[float]    # 0=N, 90=E; None pokud není průsečík
     case: Optional[NearCase]                     # None pokud není průsečík
     # (volitelně užitečná telemetrie)
@@ -42,7 +43,7 @@ class NearState:
     near_lon: Optional[float] = None
     near_x_m: Optional[float] = None             # ENU(R)
     near_y_m: Optional[float] = None             # ENU(R)
-    d_perp_m: Optional[float] = None             # kolmice z R na přímku S–E
+    d_perp_m: Optional[float] = None             # kolmice z R na přímku S–E             # kolmice z R na přímku S–E
 
 
 class NearWaypoint:
@@ -75,6 +76,9 @@ class NearWaypoint:
         Sx, Sy, _ = ecef_to_enu(*self._S_ecef, R_lat, R_lon, 0.0)
         Ex, Ey, _ = ecef_to_enu(*self._E_ecef, R_lat, R_lon, 0.0)
 
+        # euklidovská vzdálenost k cíli v ENU
+        abs_dist_goal = math.hypot(Ex, Ey)
+
         # směr přímky S->E
         vx, vy = Ex - Sx, Ey - Sy
         L_seg = math.hypot(vx, vy)
@@ -84,6 +88,7 @@ class NearWaypoint:
             dist_goal = math.hypot(Ex, Ey)  # ~ vzdálenost k bodu E
             return NearState(
                 distance_to_goal_m=dist_goal,
+                abs_distance_to_goal_m=abs_dist_goal,
                 heading_to_near_gnss_deg=None,
                 case=None,
                 near_lat=None, near_lon=None,
@@ -109,6 +114,7 @@ class NearWaypoint:
         if self.L_near_m is None:
             return NearState(
                 distance_to_goal_m=distance_to_goal_m,
+                abs_distance_to_goal_m=abs_dist_goal,
                 heading_to_near_gnss_deg=None,
                 case=None,
                 near_lat=None, near_lon=None,
@@ -123,6 +129,7 @@ class NearWaypoint:
             # žádný průsečík
             return NearState(
                 distance_to_goal_m=distance_to_goal_m,
+                abs_distance_to_goal_m=abs_dist_goal,
                 heading_to_near_gnss_deg=None,
                 case=None,
                 near_lat=None, near_lon=None,
@@ -138,6 +145,7 @@ class NearWaypoint:
             heading_gnss = heading_enu_to_gnss(heading_enu)
             return NearState(
                 distance_to_goal_m=distance_to_goal_m,
+                abs_distance_to_goal_m=abs_dist_goal,
                 heading_to_near_gnss_deg=heading_gnss,
                 case="TANGENT",
                 near_lat=nlat, near_lon=nlon,
@@ -163,6 +171,7 @@ class NearWaypoint:
             heading_gnss = heading_enu_to_gnss(heading_enu)
             return NearState(
                 distance_to_goal_m=distance_to_goal_m,
+                abs_distance_to_goal_m=abs_dist_goal,
                 heading_to_near_gnss_deg=heading_gnss,
                 case="TWO_INTERSECTIONS",
                 near_lat=nlat, near_lon=nlon,
@@ -173,7 +182,7 @@ class NearWaypoint:
     # -------------------------------
     # Veřejné API
     # -------------------------------
-    def update(self, R_lat: float, R_lon: float) -> (int, int):
+    def update(self, R_lat: float, R_lon: float) -> tuple[float, Optional[float]]:
         """
         Přepočte a vrátí aktuální stav pro polohu (R_lat, R_lon).
         Hodnoty jsou také dostupné jako self.state.
@@ -189,7 +198,8 @@ class NearWaypoint:
 if __name__ == "__main__":
     def show(label: str, st: NearState):
         print(f"\n[{label}]\n"
-              f"  distance_to_goal_m : {st.distance_to_goal_m:.3f}\n"
+              f"  distance_to_goal_m      : {st.distance_to_goal_m:.3f}\n"
+              f"  abs_distance_to_goal_m: {st.abs_distance_to_goal_m:.3f}\n"
               f"  heading_gnss_deg   : {st.heading_to_near_gnss_deg}\n"
               f"  case               : {st.case}\n"
               f"  near(ENU)          : ({st.near_x_m}, {st.near_y_m})\n"
@@ -239,7 +249,7 @@ if __name__ == "__main__":
     E = (50.0, 14.0 + 0.00002)  # cca ~1.3–1.5 m podle zem. šířky
     tester = NearWaypoint(S_lat=S[0], S_lon=S[1], E_lat=E[0], E_lon=E[1], L_near_m=L)
     # Posun R o další +0.00002 stupně východně od E (tj. projekce > L_seg)
-    R_past = (50.0, 14.0 + 0.00004)
+    R_past = (50.0 + 0.000004, 14.0 + 0.00002)
     st4 = tester.update(R_lat=R_past[0], R_lon=R_past[1])
     show("negative distance (past goal)", tester.state)
     print(st4)
