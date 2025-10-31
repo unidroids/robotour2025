@@ -93,7 +93,7 @@ class PPVelocityPlanner:
 
         self._refresh_cache()
 
-    def calculate(self, alpha_deg: float) -> Tuple[float, float]:
+    def calculate(self, alpha_deg: float) -> Tuple[int, int]:
         """
         Compute wheel speeds (vL, vR) in cm/s for a given heading error alpha (deg, CCW positive).
         Raises ValueError if requested alpha violates reachable curvature (min radius/forward-only)
@@ -158,8 +158,10 @@ class PPVelocityPlanner:
                     f"but limited to {v_max_center_m_s*100:.1f} cm/s and a_y-limit."
                 )
                 raise ValueError(msg)
-
-        return (vL_cm, vR_cm)
+        # final rounding to int cm/s
+        vL_cm = round(vL_cm)
+        vR_cm = round(vR_cm)    
+        return (vL_cm, vR_cm, kappa)
 
     # --------- internals ---------
 

@@ -49,6 +49,7 @@ sudo systemctl restart robot-lidar
 sudo systemctl restart robot-journey
 sudo systemctl restart robot-gamepad
 sudo systemctl restart robot-gnss
+sudo systemctl restart robot-pointperfect
 
 # vypis
 nano /data/logs/fastapi/fastapi.log 

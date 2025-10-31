@@ -47,15 +47,31 @@ class NavFusion:
         self._latest: Optional[NavFusionData] = None
         self._latest_lock = threading.Lock()
         self._cond = threading.Condition()
-        self._lever_arm = LeverArmHeading(r_x=0.3, r_y=0.03, speed_eps=0.03, omega_eps=0.3) # [m]
+        self._lever_arm = None # LeverArmHeading(r_x=0.3, r_y=0.03, speed_eps=0.03, omega_eps=0.3) # [m]
         
         self._last_gyroZ_value = 0.0 
+        self._gyro_last_sTag:Optional[int] = None
+        self._gyroZ_calibration_offset = 0.0
+        self._cumulated_angleZ = 0.0
+        self._heading_acc = 180.0  # výchozí hodnota přesnosti headingu
+        self._smooth_heading = 0.0
+        self._smooth_speed = 0.0
+
 
     # === Vstup z ESF-RAW handleru ============================================
 
     def on_esf_raw(self, raw: EsfRawData) -> None:
-        self._last_gyroZ_value = raw.gyroZ
-        self._gyro_smoother.update(raw.gyroZ)
+        calibrated_gyroZ = raw.gyroZ + self._gyroZ_calibration_offset
+        self._last_gyroZ_value = calibrated_gyroZ
+        self._gyro_smoother.update(calibrated_gyroZ)
+
+        #if self._gyro_last_sTag is not None:
+        #    dt_ms = raw.sTtag - self._gyro_last_sTag
+        #    if dt_ms < 0:
+        #        dt_ms += 2**32  # rollover
+        #    self._cumulated_angleZ +=  calibrated_gyroZ * (dt_ms / 1000.0)
+        #    #self._smooth_heading = (self._cumulated_angleZ + self._smooth_heading) / 2.0
+        #self._gyro_last_sTag = raw.sTtag
 
 
     # === Vstup z NAV-PVAT handleru ===========================================
@@ -63,19 +79,25 @@ class NavFusion:
     def on_nav_pvat(self, pvat: NavPvatData) -> None:
         now = time.monotonic()
         smoothed_gyroZ = self._gyro_smoother.last
+        #self._heading_acc = min(self._heading_acc, pvat.accHeading)
 
-        if pvat.fixType in (4, 5):  # dead reckoning
-            heading_deg = pvat.vehHeading
-            speed = pvat.gSpeed
-        elif self._lever_arm:
-            heading_deg, speed = self._lever_arm.theta_from_motHeading_deg(
-                motHeading_deg=pvat.motHeading,
-                speed=pvat.gSpeed,
-                omega_deg_cw=smoothed_gyroZ
-            )
-        else:
-            heading_deg = pvat.vehHeading
-            speed = pvat.gSpeed
+        # if pvat.fixType in (4, 5):  # dead reckoning
+        #     heading_deg = pvat.vehHeading
+        #     speed = pvat.gSpeed
+        # elif self._lever_arm:
+        #     heading_deg, speed = self._lever_arm.theta_from_motHeading_deg(
+        #         motHeading_deg=pvat.motHeading,
+        #         speed=pvat.gSpeed,
+        #         omega_deg_cw=smoothed_gyroZ
+        #     )
+        # else:
+        #     heading_deg = pvat.motHeading
+        #     speed = pvat.gSpeed
+        self._smooth_heading = (pvat.motHeading + self._smooth_heading * 3.0) / 4.0
+        self._smooth_speed = (pvat.gSpeed + self._smooth_speed * 3.0) / 4.0
+
+        heading_deg = self._smooth_heading
+        speed = self._smooth_speed
 
         # Zde nastav další pole podle dostupných dat
         fusion_data = NavFusionData(
