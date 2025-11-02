@@ -1,6 +1,7 @@
 from .ubx_utils import ubx_packet
 
 from .build_odo import build_odo
+from .build_odm import build_odm
 from .build_perfect import build_perfect
 from .build_prio_rate import build_prio_on, build_prio_off
 
@@ -14,6 +15,7 @@ __all__ = [
     "ubx_packet",
 
     "build_odo",
+    "build_odm",
     "build_perfect",
     "build_prio_on", "build_prio_off",
 

@@ -31,6 +31,7 @@ from dispatcher import MessageDispatcher
 
 # Handlery
 from handlers.ack_nack_handler import AckNackHandler
+from handlers.odm_handler import OdmHandler
 from handlers.dummy_handler import DummyHandler
 
 
@@ -105,10 +106,11 @@ class DriveService:
         self._disp = MessageDispatcher(self._ser)
         
         # registry handlerů (prozatím základní)
-        ack_nack_handler = AckNackHandler(self.received_ack_nack)
+        ack_nack_handler = AckNackHandler(self.on_ack_nack_data)
+        odm_handler = OdmHandler()
         self._disp.register_handler('IAM', ack_nack_handler)
         self._disp.register_handler('INM', ack_nack_handler)
-        self._disp.register_handler('ODM', DummyHandler(every=10))
+        self._disp.register_handler('ODM', odm_handler)
         self._disp.register_handler('MSM', DummyHandler(every=1))
         
         self._lock = threading.Lock()
@@ -230,7 +232,7 @@ class DriveService:
 
 
     # --------------- low‑level TX ---------------
-    def received_ack_nack(self, cmd: int, p1: int, p2: int, p3: int, p4: int, ie:int, ce:int):
+    def on_ack_nack_data(self, cmd: int, p1: int, p2: int, p3: int, p4: int, ie:int, ce:int):
         """Voláno handlery ACK/NACK při přijetí potvrzení.
         """
         # keep last ack/nack data

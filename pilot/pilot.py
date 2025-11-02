@@ -151,9 +151,27 @@ class Pilot:
         drive.send_break()
         left_speed, right_speed = 0.0, 0.0
         
-        heading_one_wheeel_comp_deg = math.asin(0.3 / (B/2)) * (180.0 / math.pi)  # small angle approx
+        heading_one_wheeel_comp_deg = math.atan2(0.3, (B/2)) * (180.0 / math.pi)  # small angle approx
         heading_comp_deg = 0.0
         smooth_heading_comp_deg = 0.0
+
+        distance_to_goal_m, abs_distance_to_goal_m, heading_to_near_gnss_deg = 0.0, 0.0, 0.0
+        heading_error = 0.0
+        kappa = 0.0
+        drive_mode = "N/A"
+
+        # print cvs header 
+        print("ts_mono," # timestamp
+              "lat,lon,hAcc," # position
+              "raw_heading,smoot_heading,heading_acc,cumulated_angleZ," # heading
+              "raw_speed,smooth_speed,speed_acc," # speed
+              "last_gyroZ,smooth_gyroZ,gyroZ_acc," # gyroZ
+              "gnssFixOK,drUsed," # fix types
+              "distance_to_goal_m,abs_distance_to_goal_m,heading_to_near_gnss_deg," # near point
+              "heading_error_deg," # heading error
+              "left_speed,right_speed,kappa,drive_mode," # drive commands
+              "heading_comp_deg,smooth_heading_comp_deg" # heading compensation
+              )
 
         last_loop = time.monotonic()
         while not self._stop_event.is_set():
@@ -170,10 +188,34 @@ class Pilot:
                     print("[PILOT] No nav data -> sending BREAK")
                     continue
                 #print(f"[PILOT] Nav data: lat={nav.lat}, lon={nav.lon}, heading={nav.heading}, speed_m={nav.speed}, gnssFixOK={nav.gnssFixOK}, drUsed={nav.drUsed} ")
-                print(f"[PILOT] Nav data: lat={nav.lat:12.8f}, lon={nav.lon:12.8f}, heading={nav.heading:6.2f}, speed_m={nav.speed*100:6.2f}, gnssFixOK={int(nav.gnssFixOK)}, drUsed={int(nav.drUsed)}")
+                #print(f"[PILOT] Nav data: lat={nav.lat:12.8f}, lon={nav.lon:12.8f}, heading={nav.heading:6.2f}, speed_m={nav.speed*100:6.2f}, gnssFixOK={int(nav.gnssFixOK)}, drUsed={int(nav.drUsed)}")
                 
                 #continue
-            
+                
+                # print telemetry csv line
+                print(
+                    # timestamp "ts_mono,"
+                    f"{nav.ts_mono:.3f}," 
+                    # position  "lat,lon,hAcc" 
+                    f"{nav.lat:.8f},{nav.lon:.8f},{nav.hAcc:.2f}," # position
+                    # heading "raw_heading,smoot_heading,heading_acc,cumulated_angleZ," 
+                    f"{nav.motHeading:.2f},{nav.heading:.2f},{nav.headingAcc:.2f},{nav.vehHeading:.2f}," # heading
+                    # speed "raw_speed,smooth_speed,speed_acc," 
+                    f"{nav.gSpeed*100:.2f},{nav.speed*100:.2f},{nav.sAcc:.2f}," # speed
+                    # gyroZ "last_gyroZ,smooth_gyroZ,gyroZ_acc," 
+                    f"{nav.lastGyroZ:.2f},{nav.gyroZ:.2f},{nav.gyroZAcc:.2f}," # gyroZ
+                    # fix types "gnssFixOK,drUsed," 
+                    f"{int(nav.gnssFixOK)},{int(nav.drUsed)}," # fix types
+                    # near point "distance_to_goal_m,abs_distance_to_goal_m,heading_to_near_gnss_deg," 
+                    f"{distance_to_goal_m:.2f},{abs_distance_to_goal_m:.2f},{heading_to_near_gnss_deg:.2f},"
+                    # heading error "heading_error_deg,"
+                    f"{heading_error:.2f},"
+                    # drive commands "left_speed,right_speed,kappa,drive_mode," 
+                    f"{left_speed:.2f},{right_speed:.2f},{kappa:.4f},{drive_mode},"
+                    # heading compensation "heading_comp_deg,smooth_heading_comp_deg," 
+                    f"{heading_comp_deg:.2f},{smooth_heading_comp_deg:.2f}"
+                )
+
                 # 2) Zjisti near point
                 (distance_to_goal_m, abs_distance_to_goal_m, heading_to_near_gnss_deg) = nearwaypoint.update(R_lat=nav.lat, R_lon=nav.lon)
 
@@ -200,6 +242,7 @@ class Pilot:
                     s = _sign(heading_error)
                     left_speed, right_speed = 20 * s, -20 * s
                     heading_comp_deg = -s * 90.0
+                    drive_mode = "TURN_IN_PLACE"
                 elif abs(heading_error) > 30:
                     # slow turn one wheel stopped
                     if heading_error < 0:
@@ -208,10 +251,12 @@ class Pilot:
                     else:
                         left_speed, right_speed = 20, 0    # doprava
                         heading_comp_deg = -heading_one_wheeel_comp_deg
+                    drive_mode = "SLOW_TURN_ONE_WHEEL"
                 else:
                     # PP velocity planning
                     left_speed, right_speed, kappa = pp_velocity.calculate(alpha_deg=heading_error)
-                    heading_comp_deg = math.asin(0.3 * kappa) * (180.0 / math.pi)  # small angle approx 
+                    heading_comp_deg = math.atan(0.3 * kappa) * (180.0 / math.pi)  # small angle approx 
+                    drive_mode = "PP_VELOCITY"
 
                 # smooth heading compensation
                 smooth_heading_comp_deg = 0.8 * smooth_heading_comp_deg + 0.2 * heading_comp_deg
@@ -219,7 +264,8 @@ class Pilot:
 
                 # 7) Odešli rychlosti kol do drive služby
                 pwm = 100 # pevné PWM pro nyní  (left_speed + right_speed)
-                result = drive.send_drive(pwm, left_speed, right_speed)
+                #result = drive.send_drive(pwm, left_speed, right_speed)
+                result = drive.send_drive(pwm, 40, -40) # testovací pevná rychlost
                 #print(f"[PILOT] Drive command sent: PWM={pwm}, left_speed={left_speed} cm/s, right_speed={right_speed} cm/s")
                 # TODO: check result?
 

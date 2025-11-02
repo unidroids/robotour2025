@@ -9,7 +9,7 @@ from builders import build_prio_on, build_prio_off
 
 
 def ensure_gnss(f, service: GnssService):
-    if not service.gnss:
+    if not service.running:
         f.write(b"ERR: GNSS not started, use START first\n")
         f.flush()
         return False
@@ -49,10 +49,9 @@ def client_thread(sock, addr, service: GnssService):
                     if not ensure_gnss(f, service): continue
                     json_data = service.get_data_json()
                     f.write((json_data+'\n').encode('utf-8'))
-                elif line.startswith("ODO "):
+                elif line.startswith("ODM"):
                     if not ensure_gnss(f, service): continue
-                    ubx = build_odo(line)
-                    service.gnss.send_ubx(ubx)
+                    service.process_odm_message(line)
                     f.write(b"OK\n")
                 elif line.startswith("PERFECT "):
                     if not ensure_gnss(f, service): continue

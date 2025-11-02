@@ -29,7 +29,7 @@ class DriveClient:
         self.sock.sendall(msg.encode("ascii"))
         resp = self.sock.recv(1024).decode().strip()
         et = time.monotonic()
-        print(f"[DRIVE CLIENT] Sent: {msg.strip()} Received: {resp} (in {(et-st)*1000:.2f}ms)")
+        #print(f"[DRIVE CLIENT] Sent: {msg.strip()} Received: {resp} (in {(et-st)*1000:.2f}ms)")
         return resp
 
 

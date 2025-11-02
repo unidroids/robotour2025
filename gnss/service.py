@@ -1,5 +1,6 @@
 # service.py
 from service_start import init_gnss_service
+from builders import build_odm
 import threading
 
 class GnssService:
@@ -51,6 +52,7 @@ class GnssService:
         if not self.running or not self._initialized:
             raise RuntimeError("[GNSS SERVICE] Service is not running. Call START first.")
 
+
     # API pro získání poslední GGA věty
     def get_gga(self):
         self._ensure_running()
@@ -70,4 +72,22 @@ class GnssService:
         self._ensure_running()
         fusion_data = self.nav_fusion.get_latest()
         return fusion_data.to_bytes() 
+
+    # API pro zracování ODM messages
+    def process_odm_message(self, odm_message):
+        self._ensure_running()
+        # parse "ODM<mono>,<omega>,<alfa>,<speed>"
+        payload = odm_message[3:]
+        fields = payload.split(",")
+        # konvert si hodnoty
+        mono = int(fields[0], 10)    
+        omega = int(fields[1], 10)
+        angle = int(fields[2], 10)
+        speed = int(fields[3], 10)
+        # update nav fusion
+        self.nav_fusion.on_odm_data(mono, omega, angle, speed)
+        # update gnss device odometry
+        ubx = build_odm(mono,speed)
+        self.gnss.send_ubx(ubx)
+
 
