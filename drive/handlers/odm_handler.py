@@ -120,7 +120,7 @@ class OdmHandler:
 
 # --- jednoduchý lokální test bez sítě ---
 if __name__ == "__main__":
-    h = OdmHandler()  # neotvírat skutečnou síť při testu
+    h = OdmHandler()  
     msg = b"$ODM123456,-10,456789,120,-130*CS\r\n"
     h.handle(msg, True)
     last = h.get_lastest()

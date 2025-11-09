@@ -86,8 +86,8 @@ class NavFusion:
     def on_odm_data(self, mono, omega, angle, speed) -> None:
         # zapamatuj si hodnoty
         self._odo_mono = mono
-        self._odo_last_omega = omega
-        self._odo_angle = angle
+        self._odo_last_omega = omega / 13106.8 # 2**16 / 1000 * 200 - konverze na stupne za sekundu (max 500 dps)
+        self._odo_angle = angle / 3355340.8 # 2**16 / 1000 * 200 * 256 - konverze na stupne -360 až 360
         self._odo_speed = speed
 
     # === Vstup z NAV-PVAT handleru ===========================================

@@ -198,11 +198,11 @@ class Pilot:
                     f"{nav.ts_mono:.3f}," 
                     # position  "lat,lon,hAcc" 
                     f"{nav.lat:.8f},{nav.lon:.8f},{nav.hAcc:.2f}," # position
-                    # heading "raw_heading,smoot_heading,heading_acc,cumulated_angleZ," 
+                    # heading "raw_heading,smoot_heading(odo_angle),heading_acc,cumulated_angleZ," 
                     f"{nav.motHeading:.2f},{nav.heading:.2f},{nav.headingAcc:.2f},{nav.vehHeading:.2f}," # heading
                     # speed "raw_speed,smooth_speed,speed_acc," 
                     f"{nav.gSpeed*100:.2f},{nav.speed*100:.2f},{nav.sAcc:.2f}," # speed
-                    # gyroZ "last_gyroZ,smooth_gyroZ,gyroZ_acc," 
+                    # gyroZ "last_gyroZ,smooth_gyroZ(odo_gyro),gyroZ_acc," 
                     f"{nav.lastGyroZ:.2f},{nav.gyroZ:.2f},{nav.gyroZAcc:.2f}," # gyroZ
                     # fix types "gnssFixOK,drUsed," 
                     f"{int(nav.gnssFixOK)},{int(nav.drUsed)}," # fix types
@@ -263,9 +263,10 @@ class Pilot:
                 #print(f"[PILOT] Heading error: {heading_error:.2f} deg, heading_comp: {heading_comp_deg:.2f} deg, smooth_comp: {smooth_heading_comp_deg:.2f} deg")
 
                 # 7) Odešli rychlosti kol do drive služby
-                pwm = 100 # pevné PWM pro nyní  (left_speed + right_speed)
+                pwm = 200 # pevné PWM pro nyní  (left_speed + right_speed)
                 #result = drive.send_drive(pwm, left_speed, right_speed)
-                result = drive.send_drive(pwm, 40, -40) # testovací pevná rychlost
+                #result = drive.send_drive(pwm, 40, -40) # testovací pevná rychlost
+                result = drive.send_drive(pwm, 50, 50) # testovací pevná rychlost
                 #print(f"[PILOT] Drive command sent: PWM={pwm}, left_speed={left_speed} cm/s, right_speed={right_speed} cm/s")
                 # TODO: check result?
 

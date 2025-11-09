@@ -83,9 +83,11 @@ class GnssService:
         mono = int(fields[0], 10)    
         omega = int(fields[1], 10)
         angle = int(fields[2], 10)
-        speed = int(fields[3], 10)
+        left_speed = int(fields[3], 10)
+        right_speed = int(fields[4], 10)
+        speed = int((left_speed + right_speed)/2)
         # update nav fusion
-        self.nav_fusion.on_odm_data(mono, omega, angle, speed)
+        self.nav_fusion.on_odm_data(mono, omega, angle, left_speed, right_speed)
         # update gnss device odometry
         ubx = build_odm(mono,speed)
         self.gnss.send_ubx(ubx)
