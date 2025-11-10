@@ -3,11 +3,10 @@
 from __future__ import annotations
 import threading
 import time
-import math 
-import traceback
 from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
 
+from data.nav_fusion_data import NavFusionData
 
 @dataclass
 class FusionState:
@@ -29,10 +28,15 @@ class Fusion:
         self._state_lock = threading.Lock()
         self._state = FusionState()
 
+        self._data_lock = threading.Lock()
+
         self.LIDAR_MESSAGE_LENGHT = 1
-        self.GNSS_MESSAGE_LENGHT = 1
+        self.GNSS_MESSAGE_LENGHT = NavFusionData.byte_size()
         self.CAMERA_MESSAGE_LENGHT = 1
-        self.DRIVE_MESSAGE_LENGHT = 1
+        self.DRIVE_MESSAGE_LENGHT = 0
+
+        # auto start
+        self._start()
 
     # ---------------------- stavové API ----------------------
 
@@ -48,7 +52,7 @@ class Fusion:
 
     # ---------------------- lifecycle ------------------------
 
-    def start(self):
+    def _start(self):
         with self._lock:
             if self.running:
                 return "OK ALREADY_RUNNING"
@@ -60,7 +64,7 @@ class Fusion:
             print("[SERVICE] STARTED")
             return "OK"
 
-    def stop(self):
+    def _stop(self):
         with self._lock:
             if not self.running:
                 return "OK WAS NOT RUNNING"
@@ -80,10 +84,16 @@ class Fusion:
             raise RuntimeError("[FUSION SERVICE] Service is not running. Call START first.")
 
   
+    def restart(self):
+        self._stop()
+        self._start()
+
 
     # ---------------------- events -----------------
     def on_gnss_data(self, msg):
         print("on_gnss_data", msg)
+        gnss_data = NavFusionData.from_bytes(msg)
+        print(gnss_data.to_json())
         pass
 
     def on_drive_data(self, msg):
@@ -98,12 +108,14 @@ class Fusion:
         print("on_lidar_data", msg)
         pass
 
+    # -------------- push to pilot ---------
+
 
 
 if __name__ == "__main__":
     print(f"TEST") 
     fusion = Fusion()
-    fusion.start()
+    #fusion.start()
     print(fusion.get_state())
     fusion.stop()
     print(fusion.get_state())

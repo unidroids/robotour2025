@@ -25,7 +25,7 @@ class OdmHandler:
     def __init__(
         self,
         host: str = "127.0.0.1",
-        port: int = 9006,
+        port: int = 9009,
         timeout: float = 2.0,
         autoconnect: bool = True,
     ) -> None:
@@ -96,7 +96,7 @@ class OdmHandler:
         if self._sock is None or not self._stream_opened:
             return
         try:
-            self._sock.sendall(odm_message + b'\n')
+            self._sock.sendall(b'DRIVE\n' + odm_message + b'\n')
             if wait:
                 result = self._sock.recv(128)
                 print(f"[OdmHandler] recieved: {result}")

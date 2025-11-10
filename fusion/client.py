@@ -2,6 +2,7 @@
 import sys
 import json
 import traceback
+import socket
 from fusion import Fusion
 
 
@@ -17,7 +18,10 @@ def client_thread(sock, addr, fusion : Fusion):
     print(f"[SERVER] Client connected: {addr}")
     try:
         while True:
-            line = f.readline()
+            try:
+                line = f.readline()
+            except ConnectionResetError as e:
+                break
             if not line:
                 break
             line = line.decode('utf-8').strip()
@@ -30,18 +34,18 @@ def client_thread(sock, addr, fusion : Fusion):
                     fusion.on_lidar_data(payload)
                     f.write(b'OK\n')
                 
-                elif line == "GNSS": # data from gnss
-                    payload = f.read(fusion.GNSS_MESSAGE_LENGHT)
-                    if not ensure_running(f, fusion): continue
-                    fusion.on_gnss_data(payload)
-                    f.write(b'OK\n')
-                
                 elif line == "DRIVE": # data from drive
-                    payload = f.read(fusion.DRIVE_MESSAGE_LENGHT)
+                    payload = f.readline() # text base data from drive
                     if not ensure_running(f, fusion): continue
                     fusion.on_drive_data(payload)
                     f.write(b'OK\n')
 
+                elif line == "GNSS": # data from gnss
+                    payload = f.read(fusion.GNSS_MESSAGE_LENGHT) #binary data from gnss
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_gnss_data(payload)
+                    f.write(b'OK\n')
+                
                 elif line == "CAMERA": # data from camera
                     payload = f.read(fusion.CAMERA_MESSAGE_LENGHT)
                     if not ensure_running(f, fusion): continue

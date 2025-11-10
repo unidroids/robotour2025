@@ -32,7 +32,7 @@ def init_gnss_service():
 
     # === Handlery s vazbami na sdílené fronty/locky ===
     nav_pvat_handler = NavPvatHandler(on_data=nav_fusion.on_nav_pvat)
-    esf_raw_handler = EsfRawHandler(on_data=nav_fusion.on_esf_raw)
+    #esf_raw_handler = EsfRawHandler(on_data=nav_fusion.on_esf_raw)
     nmea_gga_handler = NmeaGgaHandler()
     mon_sys_handler = MonSysHandler()
 
@@ -45,7 +45,7 @@ def init_gnss_service():
     # ===  UBX Dispatchery + registrace handlerů ===
     ubx_dispatcher = UbxDispatcher(gnss)
     ubx_dispatcher.register_handler(0x01, 0x17, nav_pvat_handler)
-    ubx_dispatcher.register_handler(0x10, 0x03, esf_raw_handler)
+    #ubx_dispatcher.register_handler(0x10, 0x03, esf_raw_handler)
     ubx_dispatcher.register_handler(0x0a, 0x39, mon_sys_handler)
 
     # === NMEA Dispatchery + registrace handlerů ===
@@ -61,7 +61,7 @@ def init_gnss_service():
         "nmea_dispatcher": nmea_dispatcher,
         "handlers": {
             "nav_pvat": nav_pvat_handler,
-            "esf_raw": esf_raw_handler,
+            #"esf_raw": esf_raw_handler,
             "nmea_gga": nmea_gga_handler,
             "mon_sys": mon_sys_handler
         },        
