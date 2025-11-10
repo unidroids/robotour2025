@@ -1,4 +1,5 @@
 # fusion.py
+
 from __future__ import annotations
 import threading
 import time
@@ -27,6 +28,11 @@ class Fusion:
 
         self._state_lock = threading.Lock()
         self._state = FusionState()
+
+        self.LIDAR_MESSAGE_LENGHT = 1
+        self.GNSS_MESSAGE_LENGHT = 1
+        self.CAMERA_MESSAGE_LENGHT = 1
+        self.DRIVE_MESSAGE_LENGHT = 1
 
     # ---------------------- stavové API ----------------------
 
@@ -76,6 +82,21 @@ class Fusion:
   
 
     # ---------------------- events -----------------
+    def on_gnss_data(self, msg):
+        print("on_gnss_data", msg)
+        pass
+
+    def on_drive_data(self, msg):
+        print("on_drive_data", msg)
+        pass
+
+    def on_camera_data(self, msg):
+        print("on_camera_data", msg)
+        pass
+
+    def on_lidar_data(self, msg):
+        print("on_lidar_data", msg)
+        pass
 
 
 

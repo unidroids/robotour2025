@@ -2,6 +2,8 @@
 import sys
 import json
 import traceback
+from fusion import Fusion
+
 
 def ensure_running(f, fusion):
     if not fusion.running:
@@ -10,7 +12,7 @@ def ensure_running(f, fusion):
         return False
     return True
 
-def client_thread(sock, addr, fusion):
+def client_thread(sock, addr, fusion : Fusion):
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")
     try:
@@ -20,7 +22,36 @@ def client_thread(sock, addr, fusion):
                 break
             line = line.decode('utf-8').strip()
             try:
-                if line == "PING":
+                # --- doména fusion ---
+
+                if line == "LIDAR": # data from gnss
+                    payload = f.read(fusion.LIDAR_MESSAGE_LENGHT)
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_lidar_data(payload)
+                    f.write(b'OK\n')
+                
+                elif line == "GNSS": # data from gnss
+                    payload = f.read(fusion.GNSS_MESSAGE_LENGHT)
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_gnss_data(payload)
+                    f.write(b'OK\n')
+                
+                elif line == "DRIVE": # data from drive
+                    payload = f.read(fusion.DRIVE_MESSAGE_LENGHT)
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_drive_data(payload)
+                    f.write(b'OK\n')
+
+                elif line == "CAMERA": # data from camera
+                    payload = f.read(fusion.CAMERA_MESSAGE_LENGHT)
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_camera_data(payload)
+                    f.write(b'OK\n')
+
+
+                # --- standard API ---
+
+                elif line == "PING":
                     f.write(b'PONG FUSION\n')
 
                 elif line == "START":
@@ -40,29 +71,6 @@ def client_thread(sock, addr, fusion):
                     f.write(b'OK-FUSION-BYE\n')
                     f.flush()
                     break
-
-                # --- doména fusion ---
-
-                elif line.startswith("DRIVE"): # data from DRIVE
-                    if not ensure_running(f, fusion): continue
-                    #TODO 
-                    f.write(b'OK\n')
-                
-
-                elif line.startswith("GNSS"): # data from GNSS
-                    if not ensure_running(f, fusion): continue
-                    #TODO 
-                    f.write(b'OK\n')
-                
-                elif line.startswith("LIDAR"): # data from LIDAR
-                    if not ensure_running(f, fusion): continue
-                    #TODO 
-                    f.write(b'OK\n')
-                
-                elif line.startswith("CAMERA"): # data from CAMERA
-                    if not ensure_running(f, fusion): continue
-                    #TODO 
-                    f.write(b'OK\n')
                 
                 # --- default response ---
                 else:
