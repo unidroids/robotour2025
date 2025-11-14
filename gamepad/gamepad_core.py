@@ -3,10 +3,10 @@
 import os, time, threading, json, pygame
 
 # --- Konstants ---
-POLL_PERIOD_SEC = 0.10          # 100 ms
+POLL_PERIOD_SEC = 0.025          # 25 ms
 DEADZONE_WHEELS = 5             # ±5 -> 0 (pro -100..100)
 DEADZONE_SPEED  = 5
-STEER_RANGE     = 20            # ±20 rozdíl mezi koly (DRIVE)
+STEER_RANGE     = 40            # ±40 rozdíl mezi koly (DRIVE)
 SELECT_BUTTONS  = {10}          # typické indexy "select/back/share"
 
 # --- Sdílený stav (bez tříd) ---
@@ -100,11 +100,11 @@ def compute_wheels_from_axes():
 
 def compute_drive_from_axes():
     global left_wheel, right_wheel
-    speed = apply_deadzone_int(scale_to_int(axes['axis_4'], 50)+50, DEADZONE_SPEED)  # vert
+    speed = apply_deadzone_int(scale_to_int(axes['axis_4'], 60)+60, DEADZONE_SPEED)  # vert
     steer = scale_to_int(axes['axis_2'], STEER_RANGE)                               # horiz
-    boost = scale_to_int(axes['axis_5'], 125) + 125  # vert
-    left_wheel  = clamp(speed + steer + boost, 0, 100)
-    right_wheel = clamp(speed - steer + boost, 0, 100)
+    boost = 0 # scale_to_int(axes['axis_5'], 125) + 125  # vert
+    left_wheel  = clamp(speed + steer + boost, -50, 375)
+    right_wheel = clamp(speed - steer + boost, -50, 375)
 
 def build_payload():
     # obj = {

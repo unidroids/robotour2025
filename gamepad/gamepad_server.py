@@ -17,15 +17,18 @@ def serve_forever():
     print(f"[SERVER] naslouchá na {HOST}:{PORT} (Ctrl+C pro ukončení)")
 
     def on_sigint(sig, frame):
-        print("\n[SERVER] Ctrl+C -> STOP")
+        print("\n[SERVER] STOP signal -> STOP")
         shutdown_event.set()
-        try: server.close()
-        except: pass
-        stop_all()
+        try:
+            server.close()      # odblokuje accept()
+        except:
+            pass
+        stop_all()              # nastaví core.stop_event, ukončí vlákna
         close_all_clients()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, on_sigint)
+    signal.signal(signal.SIGTERM, on_sigint)  # <- nově
 
     try:
         while not shutdown_event.is_set():
@@ -40,6 +43,7 @@ def serve_forever():
         except: pass
         close_all_clients()
         print("[SERVER] serve_forever STOP")
+
 
 if __name__ == "__main__":
     serve_forever()
