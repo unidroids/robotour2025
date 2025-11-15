@@ -15,10 +15,10 @@ def main():
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(('', SERVICE_PORT))
     sock.listen(1)
-    print(f"[SERVER] Unicore Service listening on port {SERVICE_PORT}")
+    print(f"[SERVER] Heading service listening on port {SERVICE_PORT}")
 
     def handle_sigint(signum, frame):
-        print("Stopping GNSS service...")
+        print("Stopping Heading service...")
         service.stop()
         sys.exit(0)
     signal.signal(signal.SIGINT, handle_sigint)
