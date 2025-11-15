@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 from data.nav_fusion_data import NavFusionData
 
 __all__ = [
-    "FusionEngine"
+    "FusionCore"
 ]
 
 
@@ -19,7 +19,7 @@ class FusionState:
     last_note: str = ""
     ts_mono: float = 0.0               # monotonic timestamp poslední aktualizace
 
-class FusionEngine:
+class FusionCore:
 
     VERSION = "1.0.1"
 
@@ -123,10 +123,10 @@ class FusionEngine:
 
 if __name__ == "__main__":
     print(f"TEST") 
-    fusion = FusionEngine()
+    fusion = FusionCore()
     #fusion.start()
     print(fusion.get_state())
-    fusion._stop()
+    fusion.restart()
     print(fusion.get_state())
     # try:
     #     while True:

@@ -4,7 +4,7 @@ import json
 import traceback
 import socket
 
-from fusion_engine import FusionEngine
+from fusion_core import FusionCore
 
 
 def ensure_running(f, fusion):
@@ -14,7 +14,7 @@ def ensure_running(f, fusion):
         return False
     return True
 
-def client_thread(sock:socket.socket, addr, fusion : FusionEngine):
+def client_thread(sock:socket.socket, addr, fusion : FusionCore):
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")
     try:
@@ -65,12 +65,8 @@ def client_thread(sock:socket.socket, addr, fusion : FusionEngine):
                 elif line == "PING":
                     f.write(b'PONG FUSION\n')
 
-                elif line == "START":
-                    res = fusion.start()
-                    f.write((res+'\n').encode('utf-8'))
-
-                elif line == "STOP":
-                    res = fusion.stop()
+                elif line == "RESTART":
+                    res = fusion.restart()
                     f.write((res+'\n').encode('utf-8'))
 
                 elif line == "STATE":
