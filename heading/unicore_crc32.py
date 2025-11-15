@@ -142,10 +142,12 @@ if __name__ == "__main__":
     )
 
     frame2 = b'#OBSVHA,97,GPS,FINE,2190,359897000,0,0,18,14;0*9d38304c\r\n'
+    frame3 = b'#UNIHEADINGA,92,GPS,FINE,2392,517944600,0,0,18,6;INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0*044457ef\r\n'
 
     # výpočet z payloadu (mezi '#' a '*')
     crc1 = UnicoreCRC32.compute_ascii_frame(frame1)
     crc2 = UnicoreCRC32.compute_ascii_frame(frame2)
+    
 
     print("frame1 CRC:", hex(crc1))
     print("frame2 CRC:", hex(crc2))
@@ -154,5 +156,6 @@ if __name__ == "__main__":
     assert crc2 == 0x9d38304c
     assert UnicoreCRC32.verify_ascii_frame(frame1)
     assert UnicoreCRC32.verify_ascii_frame(frame2)
+    assert UnicoreCRC32.verify_ascii_frame(frame3)
 
     print("Všechny testy prošly.")

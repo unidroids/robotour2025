@@ -24,7 +24,7 @@ from typing import Optional, Tuple
 
 import serial as pyserial  # pyserial – vyhneme se kolizi názvů
 
-from parser import DriveParser # náš inkrementální parser
+from parser import UnicoreParser # náš inkrementální parser
 
 
 __all__ = [
@@ -35,8 +35,8 @@ __all__ = [
 
 @dataclass(slots=True)
 class WrpaConfig:
-    device: str = "/dev/howerboard" # DEFAULT_DEVICE
-    baudrate: int = 921600 #DEFAULT_BAUD
+    device: str = "/dev/gnss3"    # DEFAULT_DEVICE
+    baudrate: int = 921600        # DEFAULT_BAUD
     timeout_s: float = 1.0        # read(1) timeout; max doba blokování mezi kontrolami stop_event
     write_timeout_s: float = 0.1  # write timeout
     rx_fifo_size: int = 64
@@ -49,7 +49,7 @@ class WrpaConfig:
     log_flush: bool = False       # True => flush po každé řádce (vyšší režie)
 
 
-class HoverboardSerial:
+class WrapSerial:
     """UART I/O s RX/TX vlákny a FIFO frontami + datalogger."""
 
     def __init__(self, cfg: Optional[WrpaConfig] = None):
@@ -64,7 +64,7 @@ class HoverboardSerial:
         self._reader_thr = None # threading.Thread(target=self._reader_loop, name="drive-rx", daemon=True)
         self._writer_thr = None # threading.Thread(target=self._writer_loop, name="drive-tx", daemon=True)
 
-        self._parser = DriveParser()
+        self._parser = UnicoreParser()
         # počitadla
         self._rx_bytes = 0
         self._tx_bytes = 0
@@ -164,7 +164,7 @@ class HoverboardSerial:
             self._tx_overflows,
             self._parser.junk_count,
             self._parser.bad_char_count,
-            self._parser.cs_error_count,
+            self._parser.crc32_error_count,
             self._parser.too_long_count,
             self._parser.senetces_parsed,
         )
@@ -340,13 +340,13 @@ class HoverboardSerial:
 
 
 if __name__ == "__main__":
-    hb = HoverboardSerial()
-    hb.start()
-    print("HoverboardSerial started. Press Ctrl+C to stop.")
+    wrap = WrapSerial()
+    wrap.start()
+    print("Wrap started. Press Ctrl+C to stop.")
     try:
         t0 = time.time()
         while True:
-            m = hb.get_sentence()
+            m = wrap.get_message()
             if m is not None:
                 print("RX:", m)
             if time.time() - t0 > 1.0:
@@ -355,5 +355,5 @@ if __name__ == "__main__":
         pass
     finally:
         print("Stopping...")
-        hb.stop()
-        print("Stopped. Stats:", hb.stats())
+        wrap.stop()
+        print("Stopped. Stats:", wrap.stats())

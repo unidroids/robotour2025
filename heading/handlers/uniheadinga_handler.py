@@ -5,21 +5,12 @@ import socket
 import traceback
 from typing import Optional
 
-__all__ = ["OdmHandler"]
+__all__ = ["UniHeadinAHandler"]
 
 
-class OdmHandler:
+class UniHeadinAHandler:
     """
-    Handler příjmu ODM zpráv a jejich přeposílání binárně na stream.
-
-    Očekávaná testovací věta (NMEA-like):
-        b"$ODM<ts_mono>,<gyroZ_adc>,<accumAngle_adc>,<leftSpeed>,<rightSpeed>*CS\\r\\n"
-
-    - Parsuje pomocí parse_message(msg) -> (code, fields)
-    - Po vytvoření OdmData ji uloží do self._lastest
-    - Přes otevřený TCP socket (localhost:9009) binárně posílá OdmData.to_bytes()
-    - Po prvním připojení odešle jednorázově "PUSH_ODM_DATA_STREAM\\r\\n"
-    - Socket zůstává otevřený; při chybě se pokusí o znovupřipojení při další zprávě
+    Handler příjmu UNIHEADINGA zpráv a jejich přeposílání.
     """
 
     def __init__(
@@ -36,7 +27,7 @@ class OdmHandler:
         self._sock: Optional[socket.socket] = None
         self._stream_opened = False
 
-        self._lastest: Optional[bytes] = None  # záměrně název podle zadání
+        self._lastest: Optional[bytes] = None  
 
         if autoconnect:
             self._ensure_socket()
@@ -45,16 +36,27 @@ class OdmHandler:
 
     def handle(self, message_bytes: bytes, wait: bool = False):
         """
-        Zpracuje jednu syrovou zprávu přes sériovou linku.
+        Zpracuje jednu syrovou zprávu.
         """
-
-        send_message = message_bytes[1:-5] # odstraníme $ a *CS\r\n
+        # kontrola zprávy
+        if not message_bytes.startswith(b'#UNIHEADINGA,'):
+            raise Exception("Not a #UNIHEADINGA message")
+        
+        semi_idx = message_bytes.index(b';')
+        
+        header = message_bytes[13:semi_idx]
+        #print(header)
+        body = message_bytes[semi_idx+1:-11]
+        #print(body)
+        short_idx = nth_index(body,b',',-1,8)
+        short = body[0:short_idx]
+        #print(short)
 
         # 1) uložit na _lastest
-        self._lastest = send_message
+        self._lastest = short
 
         # 2) poslat na stream
-        self._send_odm(send_message, wait)
+        self._send_heading(short, wait)
 
     def get_lastest(self) -> Optional[bytes]:
         """Vrátí naposledy přijatá ODM data (nebo None)."""
@@ -77,7 +79,7 @@ class OdmHandler:
             s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # <<< nižší latence malých zpráv
             self._sock = s
             self._stream_opened = True  # bude otevřeno po handshake
-            print(f"[OdmHandler] Connected to {self._host}:{self._port}")
+            print(f"[UniHeadingAHandler] Connected to {self._host}:{self._port}")
         except Exception as e:
             # necháme zavřené; zkusíme znovu při další zprávě
             if self._sock is not None:
@@ -87,21 +89,21 @@ class OdmHandler:
                     pass
             self._sock = None
             self._stream_opened = False
-            print(f"[OdmHandler] Unable to connect to {self._host}:{self._port}: {e!r}")
+            print(f"[UniHeadingA] Unable to connect to {self._host}:{self._port}: {e!r}")
             
 
-    def _send_odm(self, odm_message: bytes, wait:bool = False) -> None:
-        """Pošle binární ODM data. Při chybě socket zavře (reconnect proběhne při další zprávě)."""
+    def _send_heading(self, message: bytes, wait:bool = False) -> None:
+        """Pošle UNIHEADINGA data. Při chybě socket zavře (reconnect proběhne při další zprávě)."""
         self._ensure_socket()
         if self._sock is None or not self._stream_opened:
             return
         try:
-            self._sock.sendall(b'DRIVE\n' + odm_message + b'\n')
+            self._sock.sendall(b'HEADING\n' + message + b'\n')
             if wait:
-                result = self._sock.recv(128)
-                print(f"[OdmHandler] recieved: {result}")
+                result = self._sock.recv(512)
+                print(f"[UniHeadingAHandler] recieved: {result}")
         except Exception as e:
-            print(f"[OdmHandler] sendall failed: {e!r}")
+            print(f"[UniHeadigAHandler] sendall failed: {e!r}")
             self._close_socket()
 
     def _close_socket(self) -> None:
@@ -117,17 +119,22 @@ class OdmHandler:
         # best-effort úklid
         self._close_socket()
 
+def nth_index(data: bytes, sub: bytes, start:int, n: int) -> int:
+    pos = start
+    for _ in range(n):
+        pos = data.index(sub, pos + 1)
+    return pos
 
 # --- jednoduchý lokální test bez sítě ---
 if __name__ == "__main__":
-    h = OdmHandler()  
-    msg = b"$ODM123456,-10,456789,120,-130*CS\r\n"
+    h = UniHeadinAHandler()  
+    msg = b'#UNIHEADINGA,92,GPS,FINE,2392,519230000,0,0,18,8;INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0*f25b9a39\r\n'
     h.handle(msg, True)
     last = h.get_lastest()
     print("Lastest:", last)
     if last:
         print("Serialized length:", len(last), "bytes")
-    msg = b"$ODM123456,-10,456789,120,130*CS\r\n"
+    msg = b'#UNIHEADINGA,92,GPS,FINE,2392,519238000,0,0,18,8;INSUFFICIENT_OBS,NONE,0.0000,0.0000,0.0000,0.0000,0.0000,0.0000,"",0,0,0,0,0,00,0,0*e914be33\r\n'
     h.handle(msg)
     last = h.get_lastest()
     print("Lastest:", last)

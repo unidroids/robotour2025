@@ -3,7 +3,8 @@ import sys
 import json
 import traceback
 import socket
-from fusion import Fusion
+
+from fusion_engine import FusionEngine
 
 
 def ensure_running(f, fusion):
@@ -13,7 +14,7 @@ def ensure_running(f, fusion):
         return False
     return True
 
-def client_thread(sock, addr, fusion : Fusion):
+def client_thread(sock:socket.socket, addr, fusion : FusionEngine):
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")
     try:
@@ -38,6 +39,12 @@ def client_thread(sock, addr, fusion : Fusion):
                     payload = f.readline() # text base data from drive
                     if not ensure_running(f, fusion): continue
                     fusion.on_drive_data(payload)
+                    f.write(b'OK\n')
+
+                elif line == "HEADING": # data from drive
+                    payload = f.readline() # text base data from drive
+                    if not ensure_running(f, fusion): continue
+                    fusion.on_heading_data(payload)
                     f.write(b'OK\n')
 
                 elif line == "GNSS": # data from gnss

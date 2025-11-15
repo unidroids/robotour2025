@@ -8,13 +8,18 @@ from typing import Optional, Tuple
 
 from data.nav_fusion_data import NavFusionData
 
+__all__ = [
+    "FusionEngine"
+]
+
+
 @dataclass
 class FusionState:
     mode: str = "IDLE"                 # IDLE | WAITING | READY
     last_note: str = ""
     ts_mono: float = 0.0               # monotonic timestamp poslední aktualizace
 
-class Fusion:
+class FusionEngine:
 
     VERSION = "1.0.1"
 
@@ -107,6 +112,10 @@ class Fusion:
     def on_lidar_data(self, msg):
         print("on_lidar_data", msg)
         pass
+    
+    def on_heading_data(self, msg):
+        print("on_heading_data", msg)
+        pass
 
     # -------------- push to pilot ---------
 
@@ -114,10 +123,10 @@ class Fusion:
 
 if __name__ == "__main__":
     print(f"TEST") 
-    fusion = Fusion()
+    fusion = FusionEngine()
     #fusion.start()
     print(fusion.get_state())
-    fusion.stop()
+    fusion._stop()
     print(fusion.get_state())
     # try:
     #     while True:
