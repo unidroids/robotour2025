@@ -48,12 +48,12 @@ class OdmHandler:
         Zpracuje jednu syrovou zprávu přes sériovou linku.
         """
 
-        send_message = message_bytes[1:-5] # odstraníme $ a *CS\r\n
+        send_message = message_bytes[4:-5] # odstraníme $ a *CS\r\n
 
         # 1) uložit na _lastest
         self._lastest = send_message
 
-        # 2) poslat na stream
+        # 2) poslat na fusion
         self._send_odm(send_message, wait)
 
     def get_lastest(self) -> Optional[bytes]:

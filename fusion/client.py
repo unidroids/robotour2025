@@ -4,7 +4,7 @@ import json
 import traceback
 import socket
 
-from fusion_core import FusionCore
+from service import FusionService
 
 
 def ensure_running(f, fusion):
@@ -14,7 +14,7 @@ def ensure_running(f, fusion):
         return False
     return True
 
-def client_thread(sock:socket.socket, addr, fusion : FusionCore):
+def client_thread(sock:socket.socket, addr, fusion : FusionService):
     f = sock.makefile('rwb', buffering=0)
     print(f"[SERVER] Client connected: {addr}")
     try:

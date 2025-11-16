@@ -4,13 +4,13 @@ import signal
 import threading
 import sys
 
-from fusion_core import FusionCore
+from service import FusionService
 from client import client_thread
 
 SERVICE_PORT = 9009
 
 def main():
-    fusion = FusionCore()
+    fusion = FusionService()
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(('', SERVICE_PORT))

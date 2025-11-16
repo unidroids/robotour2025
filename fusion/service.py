@@ -9,7 +9,7 @@ from typing import Optional, Tuple
 from data.nav_fusion_data import NavFusionData
 
 __all__ = [
-    "FusionCore"
+    "FusionService"
 ]
 
 
@@ -19,7 +19,7 @@ class FusionState:
     last_note: str = ""
     ts_mono: float = 0.0               # monotonic timestamp poslední aktualizace
 
-class FusionCore:
+class FusionService:
 
     VERSION = "1.0.1"
 
@@ -39,6 +39,11 @@ class FusionCore:
         self.GNSS_MESSAGE_LENGHT = NavFusionData.byte_size()
         self.CAMERA_MESSAGE_LENGHT = 1
         self.DRIVE_MESSAGE_LENGHT = 0
+
+        # latest data
+        self.last_gnss_data = None
+        self.last_heading_data = None
+        self.last_drive_data = None
 
         # auto start
         self._start()
@@ -96,13 +101,19 @@ class FusionCore:
 
     # ---------------------- events -----------------
     def on_gnss_data(self, msg):
-        print("on_gnss_data", msg)
-        gnss_data = NavFusionData.from_bytes(msg)
-        print(gnss_data.to_json())
+        #print("on_gnss_data", msg)
+        self.last_gnss_data = NavFusionData.from_bytes(msg)
+        #print(self.last_gnss_data.to_json())
         pass
 
     def on_drive_data(self, msg):
-        print("on_drive_data", msg)
+        #print("on_drive_data", msg)
+        self.last_drive_data = msg
+        pass
+
+    def on_heading_data(self, msg):
+        #print("on_heading_data", msg)
+        self.last_heading_data = msg
         pass
 
     def on_camera_data(self, msg):
@@ -113,17 +124,19 @@ class FusionCore:
         print("on_lidar_data", msg)
         pass
     
-    def on_heading_data(self, msg):
-        print("on_heading_data", msg)
-        pass
 
     # -------------- push to pilot ---------
+
+    def publish(self):
+        print(f"[EngineCore] Publish at {time.monotonic}")
+
+
 
 
 
 if __name__ == "__main__":
     print(f"TEST") 
-    fusion = FusionCore()
+    fusion = FusionService()
     #fusion.start()
     print(fusion.get_state())
     fusion.restart()
