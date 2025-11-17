@@ -7,6 +7,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
 
 from data.nav_fusion_data import NavFusionData
+from core import FusionCore
 
 __all__ = [
     "FusionService"
@@ -41,6 +42,7 @@ class FusionService:
         self.DRIVE_MESSAGE_LENGHT = 0
 
         # latest data
+        self.core = FusionCore()
         self.last_gnss_data = None
         self.last_heading_data = None
         self.last_drive_data = None
@@ -102,19 +104,49 @@ class FusionService:
     # ---------------------- events -----------------
     def on_gnss_data(self, msg):
         #print("on_gnss_data", msg)
-        self.last_gnss_data = NavFusionData.from_bytes(msg)
-        #print(self.last_gnss_data.to_json())
-        pass
+        nav = NavFusionData.from_bytes(msg)
+        self.last_gnss_data = nav
+        self.core.update_position(
+            iTow=nav.ts_mono,
+            lat=nav.lat,
+            lon=nav.lon,
+            hAcc=nav.hAcc,
+            height=0.0, #TODO get height from gnss
+            vAcc=1.0, #TODO get vAcc from gnss
+        )
 
     def on_drive_data(self, msg):
         #print("on_drive_data", msg)
         self.last_drive_data = msg
-        pass
+        (tmark, omega, angle, left_speed, right_speed) = parse_drive_msg(msg)
+        self.core.update_whell_speed(
+            tmark=tmark,
+            left_wheel_speed=left_speed,
+            right_wheel_speed=right_speed,
+        )
+        self.core.update_local_heading(
+            tmark=tmark,
+            heading=angle,
+            omega=omega,
+        )
 
     def on_heading_data(self, msg):
         #print("on_heading_data", msg)
         self.last_heading_data = msg
-        pass
+        (sol, pos, length, heading, pitch, reserved, hdgstddev, ptchstddev) = parse_heading_msg(msg)
+        self.core.update_global_roll(
+            iTow=0.0, #TODO
+            lenght=length,
+            roll=pitch,
+            gstddev=ptchstddev,
+        )
+        self.core.update_global_heading(
+            iTow=0.0, #TODO
+            lenght=length,
+            heading=heading,
+            gstddev=hdgstddev,
+        )
+
 
     def on_camera_data(self, msg):
         print("on_camera_data", msg)
@@ -124,6 +156,11 @@ class FusionService:
         print("on_lidar_data", msg)
         pass
     
+    # -------------- datové API -------------
+    def get_solution(self):
+        if not self.core.ready: return None
+
+
 
     # -------------- push to pilot ---------
 
@@ -132,6 +169,52 @@ class FusionService:
 
 
 
+def parse_drive_msg(msg):
+    # ASCII zpráva: "tmark,omega,angle,left_speed,right_speed"
+    # Vstup může být bytes nebo str. Naivní konverze bez kontrol.
+
+    if isinstance(msg, bytes):
+        msg = msg.decode('ascii', errors='replace')
+
+    parts = msg.strip().split(',')
+
+    if len(parts) != 5: 
+        raise ValueError(f"parse_drive_msg: expected 8 fields, got {len(parts)}")
+
+    tmark       = int(parts[0], 10)
+    omega       = int(parts[1], 10)       # může být ±
+    angle       = int(parts[2], 10)       # může být ±
+    left_speed  = int(parts[3], 10)       # může být ±
+    right_speed = int(parts[4], 10)       # může být ±
+
+    return (tmark, omega, angle, left_speed, right_speed)
+
+
+def parse_heading_msg(msg):
+    """
+    ASCII/bytes zpráva: "sol,pos,length,heading,pitch,reserved,hdgstddev,ptchstddev"
+    – Oddělovač: čárka ','
+    – Desetinná tečka '.'
+    – Typy: sol=text, pos=text, ostatní=float
+    – Pouze kontrola počtu položek, bez rozsahových validací
+    """
+    if isinstance(msg, bytes):
+        msg = msg.decode('ascii', errors='replace')
+
+    parts = [p.strip() for p in msg.strip().split(',')]
+    if len(parts) != 8:
+        raise ValueError(f"parse_heading_msg: expected 8 fields, got {len(parts)}")
+
+    sol         = parts[0]   # Solution status (enum)
+    pos         = parts[1]    # Position type (enum)
+    length      = float(parts[2])      # baseline length
+    heading     = float(parts[3])      # 0..360
+    pitch       = float(parts[4])      # -90..+90
+    reserved    = float(parts[5])
+    hdgstddev   = float(parts[6])
+    ptchstddev  = float(parts[7])
+
+    return (sol, pos, length, heading, pitch, reserved, hdgstddev, ptchstddev)
 
 
 if __name__ == "__main__":
