@@ -33,8 +33,12 @@ class FusionService:
 
         self._state_lock = threading.Lock()
         self._state = FusionState()
+        #self._data_lock = threading.Lock()
 
-        self._data_lock = threading.Lock()
+        self._latest: Optional[NavFusionData] = None
+        self._latest_lock = threading.Lock()
+        self._cond = threading.Condition()
+
 
         self.LIDAR_MESSAGE_LENGHT = 1
         self.GNSS_MESSAGE_LENGHT = NavFusionData.byte_size()
@@ -43,6 +47,8 @@ class FusionService:
 
         # latest data
         self.core = FusionCore()
+        self._publish_couter = 0
+
         self.last_gnss_data = None
         self.last_heading_data = None
         self.last_drive_data = None
@@ -70,6 +76,7 @@ class FusionService:
                 return "OK ALREADY_RUNNING"
             if not self._initialized:
                 #TODO init helpers
+                self._publish_couter=0
                 self._initialized = True
             self.running = True
             self._set_state(mode="WAITING", last_note="SERVICE STARTED")
@@ -99,15 +106,18 @@ class FusionService:
     def restart(self):
         self._stop()
         self._start()
+        return "OK"
 
 
     # ---------------------- events -----------------
     def on_gnss_data(self, msg):
         #print("on_gnss_data", msg)
+        tmono = time.monotonic()
         nav = NavFusionData.from_bytes(msg)
+        #print("on_gnss_data", nav.to_json())
         self.last_gnss_data = nav
         self.core.update_position(
-            iTow=nav.ts_mono,
+            iTow=tmono, #TODO
             lat=nav.lat,
             lon=nav.lon,
             hAcc=nav.hAcc,
@@ -117,36 +127,45 @@ class FusionService:
 
     def on_drive_data(self, msg):
         #print("on_drive_data", msg)
+        tmono = time.monotonic()
         self.last_drive_data = msg
         (tmark, omega, angle, left_speed, right_speed) = parse_drive_msg(msg)
         self.core.update_whell_speed(
-            tmark=tmark,
+            tmark=tmono, #TODO,
             left_wheel_speed=left_speed,
             right_wheel_speed=right_speed,
         )
         self.core.update_local_heading(
-            tmark=tmark,
+            tmark=tmono, #TODO,
             heading=angle,
             omega=omega,
         )
+        #publish solution
+        if self.core.ready:
+            self._publish(self._get_solution())
+            self._set_state(mode="READY", last_note="SOLUSION PUBLISHED")
+
 
     def on_heading_data(self, msg):
         #print("on_heading_data", msg)
+        tmono = time.monotonic()
         self.last_heading_data = msg
         (sol, pos, length, heading, pitch, reserved, hdgstddev, ptchstddev) = parse_heading_msg(msg)
+        if (length > 0.7 or length < 0.3): #nevalidní rozsah
+            return 
         self.core.update_global_roll(
-            iTow=0.0, #TODO
+            iTow=tmono, #TODO
             lenght=length,
             roll=pitch,
             gstddev=ptchstddev,
         )
         self.core.update_global_heading(
-            iTow=0.0, #TODO
+            iTow=tmono, #TODO
             lenght=length,
             heading=heading,
             gstddev=hdgstddev,
         )
-
+        
 
     def on_camera_data(self, msg):
         print("on_camera_data", msg)
@@ -157,15 +176,30 @@ class FusionService:
         pass
     
     # -------------- datové API -------------
-    def get_solution(self):
+    def _get_solution(self):
         if not self.core.ready: return None
+        return self.core.get_solution()
 
 
+    # === Odběratelské API ====================================================
 
-    # -------------- push to pilot ---------
+    def _publish(self, res: NavFusionData) -> None:
+        with self._latest_lock:
+            self._latest = res
+        with self._cond:
+            self._cond.notify_all()
 
-    def publish(self):
-        print(f"[EngineCore] Publish at {time.monotonic}")
+        self._publish_couter += 1
+        if self._publish_couter % 10 == 0:            
+            print("on_gnss_data", res.to_json())
+
+    def get_latest(self) -> Optional[NavFusionData]:
+        with self._latest_lock:
+            return self._latest
+
+    def wait_for_update(self, timeout: Optional[float] = None) -> bool:
+        with self._cond:
+            return self._cond.wait(timeout=timeout)
 
 
 
@@ -182,8 +216,8 @@ def parse_drive_msg(msg):
         raise ValueError(f"parse_drive_msg: expected 8 fields, got {len(parts)}")
 
     tmark       = int(parts[0], 10)
-    omega       = int(parts[1], 10)       # může být ±
-    angle       = int(parts[2], 10)       # může být ±
+    omega       = int(parts[1], 10) / 65.535       # může být ±
+    angle       = int(parts[2], 10) / 65.535 / 200 / 256      # může být ±
     left_speed  = int(parts[3], 10)       # může být ±
     right_speed = int(parts[4], 10)       # může být ±
 

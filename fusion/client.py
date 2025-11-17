@@ -27,7 +27,7 @@ def client_thread(sock:socket.socket, addr, fusion : FusionService):
                 break
             line = line.decode('utf-8').strip()
             try:
-                # --- doména fusion ---
+                # --- input senzors data ---
 
                 if line == "LIDAR": # data from gnss
                     payload = f.read(fusion.LIDAR_MESSAGE_LENGHT)
@@ -59,6 +59,34 @@ def client_thread(sock:socket.socket, addr, fusion : FusionService):
                     fusion.on_camera_data(payload)
                     f.write(b'OK\n')
 
+                # --- output fusion data ---
+
+                elif line == "DATA": # data 
+                    if not ensure_running(f, fusion): continue
+                    sol = fusion.get_latest()
+                    if not sol: 
+                        f.write(b'\n')
+                        continue
+                    payload = sol.to_json()
+                    f.write(f"{payload}\n".encode("utf-8"))
+
+                elif line == "GET_BINARY_STREAM":
+                    if not ensure_running(f, fusion): continue
+                    while True:
+                        if not fusion.wait_for_update(timeout=1.0):
+                            continue
+                        sol = fusion.get_latest()
+                        if not sol:
+                            continue
+                        f.write(sol.to_bytes())
+                        f.flush()
+                        # Volitelně: přerušení na základě dalšího příkazu od klienta
+                        # Pokud chceš, aby klient mohl ukončit stream, můžeš zde číst další řádky:
+                        # break pokud přijde "STOP_STREAM" nebo socket zavřen
+                        # Příklad:
+                        # if f.peek(1):  # pokud je něco v bufferu od klienta
+                        #     cmd = f.readline().decode().strip()
+                        #     if cmd == "STOP_STREAM": break
 
                 # --- standard API ---
 

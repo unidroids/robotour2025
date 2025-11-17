@@ -19,9 +19,10 @@ def main():
 
     def handle_sigint(signum, frame):
         print("[SERVER] Stopping FUSION service...")
-        fusion.stop()
+        fusion._stop()
         sys.exit(0)
     signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGTERM, handle_sigint)
 
     while True:
         client_sock, addr = sock.accept()
