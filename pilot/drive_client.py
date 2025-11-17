@@ -8,7 +8,7 @@ class DriveClient:
         self.port = port
         self.sock = None
 
-    def _connect(self):
+    def connect(self):
         self.sock = socket.create_connection((self.host, self.port))
         self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         
@@ -33,7 +33,7 @@ class DriveClient:
         return resp
 
 
-    def _close(self):
+    def disconnect(self):
         if self.sock:
             try:
                 self.sock.close()
@@ -42,31 +42,45 @@ class DriveClient:
             finally:
                 self.sock = None
 
-    def start(self):
-        self._connect()
-        self.send_start() # Start the drive system
+    #def start(self):
+    #    self._connect()
+    #    self.send_break() # Start the drive system
 
-    def stop(self):
-        self.send_stop()  # Stop the robot before closing
-        self._close()
+    #def stop(self):
+    #    self.send_break()  # Stop the robot before closing
+    #    self._close()
 
     def send_start(self):
         resp = self._send_and_read(f"START\n")
+        return resp
 
     def send_stop(self):
         resp = self._send_and_read(f"STOP\n")
+        return resp
 
-    def send_break(self):
+    def send_motors_off(self):
+        resp = self._send_and_read(f"OFF\n")
+        return resp
+
+    def send_motors_on(self):
+        resp = self._send_and_read(f"ON\n")
+        return resp
+
+    def send_halt(self):
         resp = self._send_and_read(f"HALT\n")
+        return resp
 
     def send_break(self):
         resp = self._send_and_read(f"BREAK\n")
+        return resp
 
     def send_drive(self, pwm, left_speed, right_speed):
         resp = self._send_and_read(f"DRIVE {pwm} {left_speed} {right_speed}\n")
+        return resp
 
     def send_pwm(self, left, right):
         resp = self._send_and_read(f"PWM {left} {right}\n")
+        return resp
 
 if __name__ == "__main__":
     client = DriveClient()

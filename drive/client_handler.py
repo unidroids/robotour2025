@@ -9,6 +9,8 @@ Textový příkazový protokol (1 příkaz na řádek):
   POWER_OFF                  -> cmd=3, "OK"/"ERROR"
   HALT                       -> cmd=0, "OK"/"ERROR"
   BREAK                      -> cmd=5, "OK"/"ERROR"
+  ON                         -> cmd=2 (encode), "OK"/"ERROR"
+  OFF                        -> cmd=1 (encode), "OK"/"ERROR"
   DRIVE <max_pwm> <vL> <vR>  -> cmd=4 (encode), "OK"/"ERROR"
   PWM <pwmL> <pwmR>          -> cmd=101 (encode), "OK"/"ERROR"
 
@@ -78,6 +80,14 @@ def client_thread(conn: socket.socket, addr: Tuple[str, int], svc: DriveService)
 
                 elif cmd == "POWER_OFF":
                     ok = svc.power_off()
+                    _send_line(conn, "OK" if ok else "ERROR")
+
+                elif cmd == "OFF":
+                    ok = svc.motors_off()
+                    _send_line(conn, "OK" if ok else "ERROR")
+
+                elif cmd == "ON":
+                    ok = svc.motors_on()
                     _send_line(conn, "OK" if ok else "ERROR")
 
                 elif cmd == "HALT":

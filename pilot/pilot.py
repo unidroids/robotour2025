@@ -8,12 +8,14 @@ from dataclasses import dataclass, asdict
 from typing import Optional, Tuple
 
 from drive_client import DriveClient
-from gnss_client import GnssClient
+from fusion_client import FusionClient
 from data.nav_fusion_data import NavFusionData
 
 from geo_utils import heading_gnss_to_enu, lla_to_ecef, ecef_to_enu
 from near_waypoint import NearWaypoint
 from pp_velocity import PPVelocityPlanner
+
+from data_loger import DataLogger
 
 # ---------------------- util -----------------------------
 
@@ -50,7 +52,7 @@ class Pilot:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
-        self.gnss_client: Optional[GnssClient] = None
+        self.fusion_client: Optional[FusionClient] = None
         self.drive_client: Optional[DriveClient] = None
 
         self._state_lock = threading.Lock()
@@ -76,11 +78,11 @@ class Pilot:
                 return "ALREADY_RUNNING"
             if not self._initialized:
                 self.drive_client = DriveClient()
-                self.gnss_client = GnssClient()
+                self.fusion_client = FusionClient()
                 self._initialized = True
 
-            self.drive_client.start()
-            self.gnss_client.start()
+            self.drive_client.connect()
+            self.fusion_client.connect()
 
             self.running = True
             self._set_state(mode="IDLE", near_case="N/A", last_note="SERVICE STARTED")
@@ -95,13 +97,14 @@ class Pilot:
             if self._thread:
                 self._thread.join(timeout=2.0)
             try:
-                if self.gnss_client:
-                    self.gnss_client.stop()
+                if self.fusion_client:
+                    self.fusion_client.disconnect()
                 if self.drive_client:
-                    self.drive_client.stop()
+                    self.drive_client.send_motors_off()
+                    self.drive_client.disconnect()
             finally:
                 self.drive_client = None
-                self.gnss_client = None
+                self.fusion_client = None
                 self._initialized = False
                 self.running = False
                 self._set_state(mode="IDLE", near_case="N/A", last_note="SERVICE STOPPED")
@@ -116,7 +119,7 @@ class Pilot:
 
     # ---------------------- navigační vlákno -----------------
 
-    def _navigate_thread(self, gnss: GnssClient, drive: DriveClient, start_lat, start_lon, goal_lat, goal_lon, goal_radius,):
+    def _navigate_thread(self, fusion: FusionClient, drive: DriveClient, start_lat, start_lon, goal_lat, goal_lon, goal_radius,):
         """
         Navigační smyčka:
         - čte GNSS NavFusionData (10 Hz)
@@ -132,7 +135,7 @@ class Pilot:
         print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) "
               f"to (lat={E_lat}, lon={E_lon}) within radius {GOAL_RADIUS}m")
 
-        L_NEAR = 2  # lookahead pro near point (m)
+        L_NEAR = 20  # lookahead pro near point (m)
         B = 0.58     # rozchod kol (m)
         nearwaypoint = NearWaypoint(S_lat=S_lat, S_lon=S_lon, E_lat=E_lat, E_lon=E_lon, L_near_m=L_NEAR)
         pp_velocity = PPVelocityPlanner(
@@ -148,6 +151,7 @@ class Pilot:
         error_count = 0
 
         self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation started")
+        drive.send_motors_on()
         drive.send_break()
         left_speed, right_speed = 0.0, 0.0
         
@@ -160,8 +164,11 @@ class Pilot:
         kappa = 0.0
         drive_mode = "N/A"
 
+        log = DataLogger()
+
         # print cvs header 
-        print("ts_mono," # timestamp
+        log.print(
+              "ts_mono," # timestamp
               "lat,lon,hAcc," # position
               "raw_heading,smoot_heading,heading_acc,cumulated_angleZ," # heading
               "raw_speed,smooth_speed,speed_acc," # speed
@@ -171,7 +178,7 @@ class Pilot:
               "heading_error_deg," # heading error
               "left_speed,right_speed,kappa,drive_mode," # drive commands
               "heading_comp_deg,smooth_heading_comp_deg" # heading compensation
-              )
+        )
 
         last_loop = time.monotonic()
         while not self._stop_event.is_set():
@@ -181,8 +188,8 @@ class Pilot:
                 dt_s = max((loop_start - last_loop), 1e-3)
                 last_loop = loop_start
 
-                # 1) Načti data GNSS
-                nav: Optional[NavFusionData] = gnss.read_nav_fusion_data() # blokuj max 1s
+                # 1) Načti Nav Fusion Data
+                nav: Optional[NavFusionData] = fusion.read_nav_fusion_data() # blokuj max 1s
                 if not nav:
                     drive.send_break()
                     print("[PILOT] No nav data -> sending BREAK")
@@ -194,7 +201,7 @@ class Pilot:
                 #print("recieved",nav.to_json())
                 
                 # print telemetry csv line
-                print(
+                log.print(
                     # timestamp "ts_mono,"
                     f"{nav.ts_mono:.3f}," 
                     # position  "lat,lon,hAcc" 
@@ -267,7 +274,9 @@ class Pilot:
                 pwm = 70 # pevné PWM pro nyní  (left_speed + right_speed)
                 result = drive.send_drive(pwm, left_speed, right_speed)
                 #result = drive.send_drive(pwm, 40, -40) # testovací pevná rychlost
-                #result = drive.send_drive(pwm, 30, -30) # testovací pevná rychlost
+                #result = drive.send_drive(pwm, -30, 30) # testovací pevná rychlost
+                #result = drive.send_pwm(1,1) # testovací duty cycle
+                print("[Pilot]", pwm, left_speed, right_speed, result)
                 #print(f"[PILOT] Drive command sent: PWM={pwm}, left_speed={left_speed} cm/s, right_speed={right_speed} cm/s")
                 # TODO: check result?
 
@@ -283,13 +292,15 @@ class Pilot:
                     break
 
         drive.send_break()
+        time.sleep(0.2)
+        drive.send_motors_off()
         print("[PILOT] Navigation ended.")
         
 
     # ---------------------- API pro řízení -------------------
 
     def navigate(self, start_lat, start_lon, goal_lat, goal_lon, goal_radius):
-        gnss = self.gnss_client
+        fusion = self.fusion_client
         drive = self.drive_client
         with self._lock:
             self._ensure_running()
@@ -299,27 +310,26 @@ class Pilot:
             self._stop_event.clear()
             self._thread = threading.Thread(
                 target=self._navigate_thread,
-                args=(gnss, drive, start_lat, start_lon, goal_lat, goal_lon, goal_radius,),
+                args=(fusion, drive, start_lat, start_lon, goal_lat, goal_lon, goal_radius,),
                 daemon=True
             )
             self._thread.start()
 
 if __name__ == "__main__":
     print(f"Sign test {_sign(-30)} {_sign(0)} {_sign(30)}") 
-    pilot = Pilot()
-    pilot.start()
-    pilot.navigate(
-        start_lat=50.0615486,
-        start_lon=14.5996717,
-        goal_lat=50.0615486,
-        goal_lon=14.5996717+0.00002,
-        goal_radius=2.0
-    )
     try:
+        pilot = Pilot()
+        pilot.start()
+        pilot.navigate(
+            start_lat=50.0615486,
+            start_lon=14.5996717,
+            goal_lat=50.0615486,
+            goal_lon=14.5996717+0.00002,
+            goal_radius=2.0
+        )
         while True:
             time.sleep(1.0)
     except KeyboardInterrupt:
         pass
     finally:
-        pilot.drive_client.send_break()
         pilot.stop()

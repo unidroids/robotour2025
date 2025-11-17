@@ -137,13 +137,13 @@ class DriveService:
             self._running = True
             self._started_at = time.monotonic()
         # dle specifikace po startu UI/servisy poslat START motorů (cmd=2)
-        self.motors_start()
+        #self.motors_on()
         return "RUNNING"
 
     def stop(self) -> str:
         """Zastaví službu: pošle cmd=1 (STOP motorů) a zavře UART/dispatcher."""
         # nejprve zkus poslat STOP motorů
-        self.motors_stop()
+        self.motors_off()
 
         with self._lock:
             if not self._running:
@@ -162,7 +162,7 @@ class DriveService:
         stop_err = None
         try:
             # nejprve zkus poslat STOP motorů
-            self.motors_stop()   # vyhazuje TimeoutError/RuntimeError při selhání
+            self.motors_off()   # vyhazuje TimeoutError/RuntimeError při selhání
         except Exception as e:
             stop_err = e
             if not force:
@@ -191,10 +191,10 @@ class DriveService:
     def ping(self) -> str:
         return "PONG DRIVE"
 
-    def motors_start(self) -> bool:
+    def motors_on(self) -> bool:
         return self._send_cmd(2, 125, 125, 125, 125)
 
-    def motors_stop(self) -> bool:
+    def motors_off(self) -> bool:
         if not self.is_running():
             return "NOT RUNNING"
         return self._send_cmd(1, 125, 125, 125, 125)
