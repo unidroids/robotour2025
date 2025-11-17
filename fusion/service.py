@@ -46,7 +46,7 @@ class FusionService:
         self.DRIVE_MESSAGE_LENGHT = 0
 
         # latest data
-        self.core = FusionCore()
+        self.core = None
         self._publish_couter = 0
 
         self.last_gnss_data = None
@@ -76,6 +76,7 @@ class FusionService:
                 return "OK ALREADY_RUNNING"
             if not self._initialized:
                 #TODO init helpers
+                self.core = FusionCore()
                 self._publish_couter=0
                 self._initialized = True
             self.running = True
@@ -92,6 +93,7 @@ class FusionService:
                 pass
             finally:
                 #TODO
+                self.core = None
                 self._initialized = False
                 self.running = False
                 self._set_state(mode="IDLE", last_note="SERVICE STOPPED")
@@ -137,8 +139,8 @@ class FusionService:
         )
         self.core.update_local_heading(
             tmark=tmono, #TODO,
-            heading=angle,
-            omega=omega,
+            heading=-angle, #ccw to cw
+            omega=-omega, #ccw to cw
         )
         #publish solution
         if self.core.ready:
@@ -191,7 +193,7 @@ class FusionService:
 
         self._publish_couter += 1
         if self._publish_couter % 10 == 0:            
-            print("on_gnss_data", res.to_json())
+            print("published", res.to_json())
 
     def get_latest(self) -> Optional[NavFusionData]:
         with self._latest_lock:
@@ -216,8 +218,8 @@ def parse_drive_msg(msg):
         raise ValueError(f"parse_drive_msg: expected 8 fields, got {len(parts)}")
 
     tmark       = int(parts[0], 10)
-    omega       = int(parts[1], 10) / 65.535       # může být ±
-    angle       = int(parts[2], 10) / 65.535 / 200 / 256      # může být ±
+    omega       = int(parts[1], 10)       # může být ±
+    angle       = int(parts[2], 10)       # může být ±
     left_speed  = int(parts[3], 10)       # může být ±
     right_speed = int(parts[4], 10)       # může být ±
 

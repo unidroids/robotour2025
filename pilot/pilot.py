@@ -132,7 +132,7 @@ class Pilot:
         print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) "
               f"to (lat={E_lat}, lon={E_lon}) within radius {GOAL_RADIUS}m")
 
-        L_NEAR = 2.0  # lookahead pro near point (m)
+        L_NEAR = 2  # lookahead pro near point (m)
         B = 0.58     # rozchod kol (m)
         nearwaypoint = NearWaypoint(S_lat=S_lat, S_lon=S_lon, E_lat=E_lat, E_lon=E_lon, L_near_m=L_NEAR)
         pp_velocity = PPVelocityPlanner(
@@ -151,9 +151,9 @@ class Pilot:
         drive.send_break()
         left_speed, right_speed = 0.0, 0.0
         
-        heading_one_wheeel_comp_deg = math.atan2(0.3, (B/2)) * (180.0 / math.pi)  # small angle approx
-        heading_comp_deg = 0.0
-        smooth_heading_comp_deg = 0.0
+        #heading_one_wheeel_comp_deg = math.atan2(0.3, (B/2)) * (180.0 / math.pi)  # small angle approx
+        #heading_comp_deg = 0.0
+        #smooth_heading_comp_deg = 0.0
 
         distance_to_goal_m, abs_distance_to_goal_m, heading_to_near_gnss_deg = 0.0, 0.0, 0.0
         heading_error = 0.0
@@ -191,6 +191,7 @@ class Pilot:
                 #print(f"[PILOT] Nav data: lat={nav.lat:12.8f}, lon={nav.lon:12.8f}, heading={nav.heading:6.2f}, speed_m={nav.speed*100:6.2f}, gnssFixOK={int(nav.gnssFixOK)}, drUsed={int(nav.drUsed)}")
                 
                 #continue
+                #print("recieved",nav.to_json())
                 
                 # print telemetry csv line
                 print(
@@ -199,11 +200,11 @@ class Pilot:
                     # position  "lat,lon,hAcc" 
                     f"{nav.lat:.8f},{nav.lon:.8f},{nav.hAcc:.2f}," # position
                     # heading "raw_heading,smoot_heading(odo_angle),heading_acc,cumulated_angleZ," 
-                    f"{nav.motHeading:.2f},{nav.heading:.2f},{nav.headingAcc:.2f},{nav.vehHeading:.2f}," # heading
+                    f"{nav.heading:.2f},{nav.heading:.2f},{nav.headingAcc:.2f},{nav.heading:.2f}," # heading
                     # speed "raw_speed,smooth_speed,speed_acc," 
-                    f"{nav.gSpeed*100:.2f},{nav.speed*100:.2f},{nav.sAcc:.2f}," # speed
+                    f"{nav.speed:.2f},{nav.speed:.2f},{nav.sAcc:.2f}," # speed
                     # gyroZ "last_gyroZ,smooth_gyroZ(odo_gyro),gyroZ_acc," 
-                    f"{nav.lastGyroZ:.2f},{nav.gyroZ:.2f},{nav.gyroZAcc:.2f}," # gyroZ
+                    f"{nav.gyroZ:.2f},{nav.gyroZ:.2f},{nav.gyroZAcc:.2f}," # gyroZ
                     # fix types "gnssFixOK,drUsed," 
                     f"{int(nav.gnssFixOK)},{int(nav.drUsed)}," # fix types
                     # near point "distance_to_goal_m,abs_distance_to_goal_m,heading_to_near_gnss_deg," 
@@ -213,7 +214,7 @@ class Pilot:
                     # drive commands "left_speed,right_speed,kappa,drive_mode," 
                     f"{left_speed:.2f},{right_speed:.2f},{kappa:.4f},{drive_mode},"
                     # heading compensation "heading_comp_deg,smooth_heading_comp_deg," 
-                    f"{heading_comp_deg:.2f},{smooth_heading_comp_deg:.2f}"
+                    #f"{heading_comp_deg:.2f},{smooth_heading_comp_deg:.2f}"
                 )
 
                 # 2) Zjisti near point
@@ -234,39 +235,39 @@ class Pilot:
                     break
 
                 # 5) Spočti chybu heading robota vůči near point
-                heading_error = _wrap_angle_deg(heading_to_near_gnss_deg - (nav.heading + smooth_heading_comp_deg )) # ccw positive
+                heading_error = _wrap_angle_deg(heading_to_near_gnss_deg - nav.heading) 
 
                 # 6) Vypočti nové rychlosti kola
-                if (abs(heading_error) > 180):
+                if (abs(heading_error) > 90):
                     # turn in place
                     s = _sign(heading_error)
-                    left_speed, right_speed = 20 * s, -20 * s
-                    heading_comp_deg = -s * 90.0
+                    left_speed, right_speed = 30 * s, -30 * s
+                    #heading_comp_deg = -s * 90.0
                     drive_mode = "TURN_IN_PLACE"
-                elif abs(heading_error) > 30:
+                elif abs(heading_error) > 20:
                     # slow turn one wheel stopped
                     if heading_error < 0:
-                        left_speed, right_speed = 0, 20    # doleva
-                        heading_comp_deg = +heading_one_wheeel_comp_deg
+                        left_speed, right_speed = 0, 30    # doleva
+                        #heading_comp_deg = +heading_one_wheeel_comp_deg
                     else:
-                        left_speed, right_speed = 20, 0    # doprava
-                        heading_comp_deg = -heading_one_wheeel_comp_deg
+                        left_speed, right_speed = 30, 0    # doprava
+                        #heading_comp_deg = -heading_one_wheeel_comp_deg
                     drive_mode = "SLOW_TURN_ONE_WHEEL"
                 else:
                     # PP velocity planning
-                    left_speed, right_speed, kappa = pp_velocity.calculate(alpha_deg=heading_error)
-                    heading_comp_deg = math.atan(0.3 * kappa) * (180.0 / math.pi)  # small angle approx 
+                    left_speed, right_speed, kappa = pp_velocity.calculate(alpha_deg=-heading_error)
+                    #heading_comp_deg = math.atan(0.3 * kappa) * (180.0 / math.pi)  # small angle approx 
                     drive_mode = "PP_VELOCITY"
 
                 # smooth heading compensation
-                smooth_heading_comp_deg = 0.8 * smooth_heading_comp_deg + 0.2 * heading_comp_deg
+                #smooth_heading_comp_deg = 0.8 * smooth_heading_comp_deg + 0.2 * heading_comp_deg
                 #print(f"[PILOT] Heading error: {heading_error:.2f} deg, heading_comp: {heading_comp_deg:.2f} deg, smooth_comp: {smooth_heading_comp_deg:.2f} deg")
 
                 # 7) Odešli rychlosti kol do drive služby
-                pwm = 200 # pevné PWM pro nyní  (left_speed + right_speed)
-                #result = drive.send_drive(pwm, left_speed, right_speed)
+                pwm = 70 # pevné PWM pro nyní  (left_speed + right_speed)
+                result = drive.send_drive(pwm, left_speed, right_speed)
                 #result = drive.send_drive(pwm, 40, -40) # testovací pevná rychlost
-                result = drive.send_drive(pwm, 50, 50) # testovací pevná rychlost
+                #result = drive.send_drive(pwm, 30, -30) # testovací pevná rychlost
                 #print(f"[PILOT] Drive command sent: PWM={pwm}, left_speed={left_speed} cm/s, right_speed={right_speed} cm/s")
                 # TODO: check result?
 
@@ -312,7 +313,7 @@ if __name__ == "__main__":
         start_lon=14.5996717,
         goal_lat=50.0615486,
         goal_lon=14.5996717+0.00002,
-        goal_radius=1.0
+        goal_radius=2.0
     )
     try:
         while True:
@@ -320,4 +321,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     finally:
+        pilot.drive_client.send_break()
         pilot.stop()

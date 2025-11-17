@@ -4,7 +4,7 @@ import struct
 from data.nav_fusion_data import NavFusionData
 
 class GnssClient:
-    def __init__(self, host='127.0.0.1', port=9006):
+    def __init__(self, host='127.0.0.1', port=9009):
         self.host = host
         self.port = port
         self.sock = None

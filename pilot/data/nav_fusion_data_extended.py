@@ -9,11 +9,11 @@ import json
 @dataclass
 class NavFusionData:
     """
-    Kompaktní 2D stav pro PILOTA, verze 1.
+    Kompaktní 2D stav pro PILOTA, verze 2.
 
-    Binární formát (Little-Endian), velikost 51 B:
+    Binární formát (Little-Endian), velikost 63 B:
 
-        B      version     (uint8)   - musí být 1
+        B      version     (uint8)   - musí být 2
         d      ts_mono     (float64) - monotonic timestamp [s]
         d      lat         (float64) - WGS84 [deg]
         d      lon         (float64) - WGS84 [deg]
@@ -26,9 +26,12 @@ class NavFusionData:
         f      gyroZAcc    (float32) - [deg/s]
         B      gnssFixOK   (uint8)   - 0/1
         B      drUsed      (uint8)   - 0/1
+        f      vehHeading  (float32) - [deg] (debug)
+        f      motHeading  (float32) - [deg] (debug)
+        f      lastGyroZ   (float32) - [deg/s] (debug)
     """
 
-    VERSION: ClassVar[int] = 1
+    VERSION: ClassVar[int] = 2
 
     # --- čas ---
     ts_mono: float
@@ -48,13 +51,19 @@ class NavFusionData:
     gnssFixOK: bool
     drUsed: bool
 
+    # --- ladící položky ---
+    vehHeading: float
+    motHeading: float
+    lastGyroZ: float
+    gSpeed: float  
+
     # --- binární formát ---
-    _STRUCT_FMT: ClassVar[str] = "<B d d d f f f f f f f B B"
+    _STRUCT_FMT: ClassVar[str] = "<B d d d f f f f f f f B B f f f f"
     _STRUCT: ClassVar[struct.Struct] = struct.Struct(_STRUCT_FMT)
 
     # --- API ---
     def to_bytes(self) -> bytes:
-        """Zabalí objekt do LE binárního streamu (51 B)."""
+        """Zabalí objekt do LE binárního streamu (63 B)."""
         return self._STRUCT.pack(
             self.VERSION,
             self.ts_mono,
@@ -69,6 +78,10 @@ class NavFusionData:
             float(self.gyroZAcc),
             1 if self.gnssFixOK else 0,
             1 if self.drUsed else 0,
+            float(self.vehHeading),
+            float(self.motHeading),
+            float(self.lastGyroZ),
+            float(self.gSpeed),
         )
 
     @classmethod
@@ -94,11 +107,15 @@ class NavFusionData:
             gyroZAcc=unpacked[10],
             gnssFixOK=bool(unpacked[11]),
             drUsed=bool(unpacked[12]),
+            vehHeading=unpacked[13],
+            motHeading=unpacked[14],
+            lastGyroZ=unpacked[15],
+            gSpeed=unpacked[16],
         )
 
     @classmethod
     def byte_size(cls) -> int:
-        """Vrátí velikost binární reprezentace (51 B)."""
+        """Vrátí velikost binární reprezentace (63 B)."""
         return cls._STRUCT.size
 
     def to_json(self) -> str:
@@ -116,6 +133,10 @@ class NavFusionData:
             "gyroZAcc": self.gyroZAcc,
             "gnssFixOK": bool(self.gnssFixOK),
             "drUsed": bool(self.drUsed),
+            "vehHeading": self.vehHeading,
+            "motHeading": self.motHeading,
+            "lastGyroZ": self.lastGyroZ,
+            "gSpeed": self.speed,  
         })
 
 
@@ -134,6 +155,10 @@ if __name__ == "__main__":
         gyroZAcc=0.8,
         gnssFixOK=True,
         drUsed=False,
+        vehHeading=90.0,
+        motHeading=91.0,
+        lastGyroZ=-12.0,
+        gSpeed=0.54,  
     )
     blob = state.to_bytes()
     print("Byte size:", len(blob), "expected:", NavFusionData.byte_size())
