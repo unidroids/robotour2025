@@ -77,15 +77,22 @@
     <div id="wrapper">
         <div id="output">Drive Test - Výstup připraven</div>
         <div id="break">
-            <button class="vertical-btn" ontouchstart="driveCmd('break')">STŮJ</button>
+            <button class="vertical-btn" ontouchstart="driveCmd('break')">Brzda</button>
         </div>
         <div id="controls">
             <button onclick="driveCmd('status')">Status</button>
-            <button onclick="driveCmd('start')">Start</button>
+            <button onclick="driveCmd('start')">Služba Start</button>
+            <button onclick="driveCmd('on')">Zapnout motory</button>
+            <hr />
             <button onclick="driveCmd('forward')">Dopředu</button>
-            <button onclick="driveCmd('break')">Brzda</button>
             <button onclick="driveCmd('backward')">Dozadu</button>
-            <button onclick="driveCmd('stop')">Stop</button>
+            <button onclick="driveCmd('left')">Doleva</button>
+            <button onclick="driveCmd('right')">Doprava</button>
+            <button onclick="driveCmd('ring')">Kolečko</button>
+            <hr />
+            <button onclick="driveCmd('halt')">Halt</button>
+            <button onclick="driveCmd('off')">Vypnout motory</button>
+            <button onclick="driveCmd('stop')">Služba Stop</button>
             <hr />
             <button onclick="location.href='/'">⏮ Zpět na hlavní panel</button>
         </div>

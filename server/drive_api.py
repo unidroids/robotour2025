@@ -12,10 +12,17 @@ DRIVE_PORT = 9003
 DRIVE_CMD_MAP = {
     "status"    : "PING",
     "start"     : "START",
-    "stop"      : "STOP",
+    "on"        : "ON",
     "break"     : "BREAK",
-    "forward"   : "DRIVE 100 20 20",
-    "backward"  : "DRIVE 100 -20 -20",
+    "halt"      : "HALT",
+    "forward"   : "DRIVE 50 20 20",
+    "backward"  : "DRIVE 50 -20 -20",
+    "left"      : "DRIVE 50 -20 20",
+    "right"     : "DRIVE 50 20 -20",
+    "ring"      : "DRIVE 50 40 20",
+    "off"       : "OFF",
+    "stop"      : "STOP",
+    
 }
 
 def send_drive(cmd: str, timeout=20) -> str:
