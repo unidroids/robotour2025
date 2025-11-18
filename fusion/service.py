@@ -94,6 +94,8 @@ class FusionService:
             finally:
                 #TODO
                 self.core = None
+                self._publish_couter = 0
+                self._latest = None
                 self._initialized = False
                 self.running = False
                 self._set_state(mode="IDLE", last_note="SERVICE STOPPED")

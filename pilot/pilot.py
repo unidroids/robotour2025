@@ -135,14 +135,14 @@ class Pilot:
         print(f"[PILOT] Navigation started: from (lat={S_lat}, lon={S_lon}) "
               f"to (lat={E_lat}, lon={E_lon}) within radius {GOAL_RADIUS}m")
 
-        L_NEAR = 20  # lookahead pro near point (m)
+        L_NEAR = 2  # lookahead pro near point (m)
         B = 0.58     # rozchod kol (m)
         nearwaypoint = NearWaypoint(S_lat=S_lat, S_lon=S_lon, E_lat=E_lat, E_lon=E_lon, L_near_m=L_NEAR)
         pp_velocity = PPVelocityPlanner(
             a_y_max=0.5,        # m/s^2
             L=L_NEAR,              # m
             b=B,              # m
-            max_speed_cm_s=50.0,# cm/s
+            max_speed_cm_s=60.0,# cm/s
             min_wheel_speed_cm_s=20.0, # cm/s
             min_turn_radius_m=0.29,  # m
         )
@@ -238,20 +238,20 @@ class Pilot:
                 if not heading_to_near_gnss_deg:
                     print(f"[PILOT] No near point found -> sending BREAK. Distance to goal: {abs_distance_to_goal_m:.2f} m")
                     drive.send_break()
-                    self._set_state(mode="NAVIGATE", near_case="NO_INTERSECTION", last_note="No near point found")
+                    self._set_state(mode="GOAL_NOT_REACHED", near_case="NO_INTERSECTION", last_note="No near point found")
                     break
 
                 # 5) Spočti chybu heading robota vůči near point
                 heading_error = _wrap_angle_deg(heading_to_near_gnss_deg - nav.heading) 
 
                 # 6) Vypočti nové rychlosti kola
-                if (abs(heading_error) > 90):
+                if (abs(heading_error) > 60):
                     # turn in place
                     s = _sign(heading_error)
                     left_speed, right_speed = 30 * s, -30 * s
                     #heading_comp_deg = -s * 90.0
                     drive_mode = "TURN_IN_PLACE"
-                elif abs(heading_error) > 20:
+                elif abs(heading_error) > 15:
                     # slow turn one wheel stopped
                     if heading_error < 0:
                         left_speed, right_speed = 0, 30    # doleva

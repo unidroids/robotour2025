@@ -11,6 +11,7 @@ from util import log_event
 
 
 # Používané služby:
+PORT_DRIVE   = 9003
 PORT_GNSS    = 9006
 PORT_PPOINT  = 9007  # PointPerfect
 PORT_FUSION  = 9009
@@ -157,12 +158,15 @@ def _set_point_workflow() -> None:
         _send_and_report(PORT_GNSS,   "PING")
         _send_and_report(PORT_PPOINT, "PING")
         _send_and_report(PORT_HEADING,"PING")
+        _send_and_report(PORT_DRIVE,  "PING")
 
         # --- START potřebných služeb ---
         _send_and_report(PORT_FUSION, "RESTART")
         _send_and_report(PORT_GNSS,   "START")
         _send_and_report(PORT_PPOINT, "START")
         _send_and_report(PORT_HEADING,"START")
+        _send_and_report(PORT_DRIVE,  "START")
+        
 
         _safe_send_to_client("WAIT FUSION(hAcc<500mm)...\n")
 
@@ -170,7 +174,7 @@ def _set_point_workflow() -> None:
         poll_s = 1.0
         t0 = time.time()
         saved = False
-        threshold_mm = 500.0   # 0.5 m
+        threshold_mm = 200.0   # 0.5 m
         radius_m = 1.0         # vzdálenost k cíli, uložená do point.ini
 
         while not _stop_requested.is_set() and (time.time() - t0) < timeout_s:
@@ -243,6 +247,7 @@ def stop_setpoint_workflow() -> None:
     """
     _stop_requested.set()
     try:
+        _send_and_report(PORT_DRIVE, "STOP")
         _send_and_report(PORT_HEADING, "STOP")
         _send_and_report(PORT_PPOINT,  "STOP")
         _send_and_report(PORT_GNSS,    "STOP")

@@ -147,7 +147,7 @@ def _unsafe(hacc_mm: Optional[float], dist_cm: Optional[float]) -> bool:
     return False
 
 
-def _await_gnss_ok(threshold_mm: float = 500.0, timeout_s: float = 120.0, poll_s: float = 0.5) -> bool:
+def _await_gnss_ok(threshold_mm: float = 300.0, timeout_s: float = 120.0, poll_s: float = 0.5) -> bool:
     """Čeká, než GNSS hAcc klesne pod threshold_mm. Vrací True/False dle úspěchu/timeoutu."""
     t0 = time.time()
     while not _stop_requested.is_set() and (time.time() - t0) < timeout_s:
@@ -193,7 +193,7 @@ def _point_workflow():
 
         # Po startu Skupiny 1 vyčkej, až GNSS bude přesný (hAcc < 500 mm)
         _safe_send_to_client("WAIT GNSS(hAcc<500mm)...\n")
-        if not _await_gnss_ok(threshold_mm=500.0, timeout_s=120.0, poll_s=0.5):
+        if not _await_gnss_ok(threshold_mm=300.0, timeout_s=120.0, poll_s=0.5):
             _safe_send_to_client("ERROR: GNSS not ready (hAcc >= 500mm) within timeout.\n")
             return  # předčasné ukončení workflow (cleanup proběhne ve finally)
 
@@ -206,7 +206,7 @@ def _point_workflow():
 
         # Rychlá validace obou: GNSS (pořád OK) + LIDAR (začne vracet DISTANCE)
         _safe_send_to_client("VALIDATE GNSS & LIDAR...\n")
-        gnss_still_ok = _await_gnss_ok(threshold_mm=500.0, timeout_s=60.0, poll_s=1.0)
+        gnss_still_ok = _await_gnss_ok(threshold_mm=300.0, timeout_s=60.0, poll_s=1.0)
         lidar_ok      = _await_lidar_ok(timeout_s=60.0, poll_s=1.0)
         if not (gnss_still_ok and lidar_ok):
             if not gnss_still_ok:
