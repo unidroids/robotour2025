@@ -10,10 +10,13 @@ JOURNEY_HOST = "127.0.0.1"
 JOURNEY_PORT = 9004
 
 JOURNEY_CMD_MAP = {
-    "status"    : "PING",
+    "ping"    : "PING",
+    "status"    : "STATE",
     "demo"      : "DEMO",
     "manual"    : "MANUAL",
-    "point"     : "POINT",
+    "point-set" : "SET-POINT",
+    "point-goto": "TO-POINT",
+    "point-back": "POINT-AND-BACK",
     "auto"      : "AUTO",
     "stop"      : "STOP",
 }

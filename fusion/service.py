@@ -142,10 +142,6 @@ class FusionService:
             heading=-angle, #ccw to cw
             omega=-omega, #ccw to cw
         )
-        #publish solution
-        if self.core.ready:
-            self._publish(self._get_solution())
-            self._set_state(mode="READY", last_note="SOLUSION PUBLISHED")
 
 
     def on_heading_data(self, msg):
@@ -167,6 +163,11 @@ class FusionService:
             heading=heading,
             gstddev=hdgstddev,
         )
+        #publish solution
+        if self.core.ready:
+            self._publish(self._get_solution())
+            self._set_state(mode="READY", last_note="SOLUSION PUBLISHED")
+
         
 
     def on_camera_data(self, msg):

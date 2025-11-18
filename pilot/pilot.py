@@ -151,8 +151,8 @@ class Pilot:
         error_count = 0
 
         self._set_state(mode="NAVIGATE", near_case="N/A", last_note="Navigation started")
-        drive.send_motors_on()
-        drive.send_break()
+        resp = drive.send_motors_on()
+        #resp = drive.send_break()
         left_speed, right_speed = 0.0, 0.0
         
         #heading_one_wheeel_comp_deg = math.atan2(0.3, (B/2)) * (180.0 / math.pi)  # small angle approx

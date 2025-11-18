@@ -185,6 +185,7 @@ def _point_workflow():
         _send_and_report(PORT_DRIVE,  "PING")
         _send_and_report(PORT_HEADING,"PING")
 
+        _send_and_report(PORT_FUSION, "RESTART")
         _send_and_report(PORT_HEADING,"START")
         _send_and_report(PORT_GNSS,   "START")
         _send_and_report(PORT_PPOINT, "START")
@@ -192,7 +193,7 @@ def _point_workflow():
 
         # Po startu Skupiny 1 vyčkej, až GNSS bude přesný (hAcc < 500 mm)
         _safe_send_to_client("WAIT GNSS(hAcc<500mm)...\n")
-        if not _await_gnss_ok(threshold_mm=50.0, timeout_s=120.0, poll_s=0.5):
+        if not _await_gnss_ok(threshold_mm=500.0, timeout_s=120.0, poll_s=0.5):
             _safe_send_to_client("ERROR: GNSS not ready (hAcc >= 500mm) within timeout.\n")
             return  # předčasné ukončení workflow (cleanup proběhne ve finally)
 
@@ -205,7 +206,7 @@ def _point_workflow():
 
         # Rychlá validace obou: GNSS (pořád OK) + LIDAR (začne vracet DISTANCE)
         _safe_send_to_client("VALIDATE GNSS & LIDAR...\n")
-        gnss_still_ok = _await_gnss_ok(threshold_mm=50.0, timeout_s=60.0, poll_s=1.0)
+        gnss_still_ok = _await_gnss_ok(threshold_mm=500.0, timeout_s=60.0, poll_s=1.0)
         lidar_ok      = _await_lidar_ok(timeout_s=60.0, poll_s=1.0)
         if not (gnss_still_ok and lidar_ok):
             if not gnss_still_ok:
@@ -302,6 +303,7 @@ def _point_workflow():
             _send_and_report(PORT_PPOINT, "STOP")
             _send_and_report(PORT_GNSS,   "STOP")
             _send_and_report(PORT_HEADING,"STOP")
+            _send_and_report(PORT_FUSION, "RESTART")
         except Exception as e:
             log_event(f"POINT stop cleanup error: {e}")
 
@@ -333,6 +335,7 @@ def stop_point_workflow() -> None:
         _send_and_report(PORT_PPOINT, "STOP")
         _send_and_report(PORT_GNSS,   "STOP")
         _send_and_report(PORT_HEADING,"STOP")
+        _send_and_report(PORT_FUSION, "RESTART")
 
     except Exception:
         pass

@@ -107,7 +107,7 @@ class NavFusionData:
             "ts_mono": self.ts_mono,
             "lat": self.lat,
             "lon": self.lon,
-            "hAcc": self.hAcc,
+            "hAcc": self.hAcc * 1000,
             "heading": self.heading,
             "headingAcc": self.headingAcc,
             "speed": self.speed,

@@ -10,8 +10,10 @@ from workflow_demo import start_demo_workflow, stop_demo_workflow, demo_running
 # Nový MANUAL workflow:
 from workflow_manual import start_manual_workflow, stop_manual_workflow, manual_running
 # Nové workflow POINT a AUTO:
-from workflow_point import start_point_workflow, stop_point_workflow, point_running
+from workflow_to_point import start_point_workflow, stop_point_workflow, point_running
 from workflow_auto  import start_auto_workflow,  stop_auto_workflow,  auto_running
+# Nové workflow SET-POINT:
+from workflow_set_point import start_setpoint_workflow, stop_setpoint_workflow, setpoint_running
 
 HOST = "127.0.0.1"
 PORT = 9004
@@ -35,17 +37,25 @@ def status_text() -> str:
     if demo_running.is_set():
         return "RUNNING DEMO"
     if point_running.is_set():
-        return "RUNNING POINT"
+        return "RUNNING TO-POINT"
     if auto_running.is_set():
         return "RUNNING AUTO"
+    if setpoint_running.is_set():
+        return "RUNNING SET-POINT"
     return "IDLE"
 
 
 def _any_workflow_running() -> Optional[str]:
-    if manual_running.is_set(): return "MANUAL"
-    if demo_running.is_set():   return "DEMO"
-    if point_running.is_set():  return "POINT"
-    if auto_running.is_set():   return "AUTO"
+    if manual_running.is_set():
+        return "MANUAL"
+    if demo_running.is_set():
+        return "DEMO"
+    if point_running.is_set():
+        return "TO-POINT"
+    if auto_running.is_set():
+        return "AUTO"
+    if setpoint_running.is_set():
+        return "SET-POINT"
     return None
 
 
@@ -67,9 +77,9 @@ def handle_client(conn: socket.socket, addr):
 
                     # ---- ZÁKLADNÍ PŘÍKAZY -----------------------------------
                     if cmd == "PING":
-                        safe_send(conn, "PONG\n")
+                        safe_send(conn, "PONG JOURNEY\n")
 
-                    elif cmd == "STATUS":
+                    elif cmd == "STATE":
                         safe_send(conn, status_text() + "\n")
 
                     elif cmd == "LOG":
@@ -80,11 +90,12 @@ def handle_client(conn: socket.socket, addr):
                             safe_send(conn, f"ERROR {e}\n")
 
                     elif cmd == "STOP":
-                        # Zastaví libovolné běžící workflow (MANUAL/DEMO/POINT/AUTO)
+                        # Zastaví libovolné běžící workflow (MANUAL/DEMO/POINT/AUTO/SET-POINT)
                         stop_manual_workflow()
                         stop_demo_workflow()
                         stop_point_workflow()
                         stop_auto_workflow()
+                        stop_setpoint_workflow()
                         safe_send(conn, "OK STOP SENT\n")
 
                     elif cmd == "EXIT":
@@ -109,14 +120,14 @@ def handle_client(conn: socket.socket, addr):
                             start_demo_workflow(client_conn=conn)
                             safe_send(conn, "OK DEMO WORKFLOW STARTED\n")
 
-                    # ---- WORKFLOW – POINT -----------------------------------
-                    elif cmd == "POINT":
+                    # ---- WORKFLOW – POINT (TO-POINT) ------------------------
+                    elif cmd == "TO-POINT":
                         running = _any_workflow_running()
                         if running:
                             safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
                         else:
                             start_point_workflow(client_conn=conn)
-                            safe_send(conn, "OK POINT WORKFLOW STARTED\n")
+                            safe_send(conn, "OK TO POINT WORKFLOW STARTED\n")
 
                     # ---- WORKFLOW – AUTO ------------------------------------
                     elif cmd == "AUTO":
@@ -126,6 +137,15 @@ def handle_client(conn: socket.socket, addr):
                         else:
                             start_auto_workflow(client_conn=conn)
                             safe_send(conn, "OK AUTO WORKFLOW STARTED\n")
+
+                    # ---- WORKFLOW – SET-POINT (uložení aktuálního bodu) -----
+                    elif cmd == "SET-POINT":
+                        running = _any_workflow_running()
+                        if running:
+                            safe_send(conn, f"ERR: workflow {running} je právě aktivní\n")
+                        else:
+                            start_setpoint_workflow(client_conn=conn)
+                            safe_send(conn, "OK SET POINT WORKFLOW STARTED\n")
 
                     else:
                         safe_send(conn, "ERR Unknown cmd\n")
@@ -170,10 +190,12 @@ def sigint_handler(signum, frame):
     stop_demo_workflow()
     stop_point_workflow()
     stop_auto_workflow()
+    stop_setpoint_workflow()
 
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, sigint_handler)
+    #signal.signal(signal.SIGKILL, sigint_handler)
     try:
         server_main()
     except Exception as e:
