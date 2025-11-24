@@ -102,7 +102,7 @@ public:
 private:
     void resetDistance() {
         latest_.store(-1.f);
-        seq_.store(0);
+        seq_.store(-1);
     }
 
     void loopRead() {

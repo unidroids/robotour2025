@@ -87,7 +87,7 @@ void handle_client(int sock) {
             //std::cout << "CMD(" << sock << "): " << line << std::endl;
 
             if (line == "PING") {
-                send_line(sock, "PONG");
+                send_line(sock, "PONG LIDAR");
             } else if (line == "START") {
                 bool ok = lidar.start();
                 send_line(sock, ok ? "OK STARTED" : "ERR START");
@@ -100,10 +100,13 @@ void handle_client(int sock) {
                 if (lidar.getDistance(seq, dist)) {
                     send_line(sock, std::to_string(seq) + " " + std::to_string(dist));
                 } else {
-                    send_line(sock, "-1");   // vzdálenost zatím není známa
+                    send_line(sock, "-1 -1");   // vzdálenost zatím není známa
                 }
+            } else if (line == "CORIDORS") {
+                
+
             } else if (line == "EXIT") {
-                send_line(sock, "BYE");
+                send_line(sock, "BYE LIDAR");
                 ::shutdown(sock, SHUT_RDWR);
                 break;
             } else if (line == "SHUTDOWN") {
