@@ -104,6 +104,23 @@ void handle_client(int sock) {
                 }
             } else if (line == "CORIDORS") {
                 
+            } else if (line.rfind("MODE ", 0) == 0) {
+                std::string arg = line.substr(5);
+                char *end = nullptr;
+                errno = 0;
+                long val = std::strtol(arg.c_str(), &end, 0); // base 0 => 10, 0x10, 020 atd.
+
+                if (errno != 0 || end == arg.c_str() || val < 0 || val > 0xFFFFFFFFul) {
+                    send_line(sock, "ERR MODE PARSE");
+                } else {
+                    uint32_t mode = static_cast<uint32_t>(val);
+                    bool ok = lidar.setMode(mode);  // nová metoda viz níže
+                    if (ok) {
+                        send_line(sock, "OK MODE " + std::to_string(mode));
+                    } else {
+                        send_line(sock, "ERR MODE APPLY");
+                    }
+                }
 
             } else if (line == "EXIT") {
                 send_line(sock, "BYE LIDAR");

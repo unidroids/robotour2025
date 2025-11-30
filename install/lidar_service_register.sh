@@ -27,7 +27,7 @@ WorkingDirectory=/opt/projects/robotour/server
 ExecStartPre=/bin/bash -c '/usr/bin/fuser -k 9002/tcp || true'
 ExecStartPre=/bin/sleep 0.5
 
-ExecStart=/opt/projects/robotour/server/robot_lidar_tcp
+ExecStart=/opt/projects/robotour/lidar/bin/robot_lidar_tcp
 
 # logujeme přes systemd přesměrování
 StandardOutput=append:/data/logs/lidar/lidar.log
