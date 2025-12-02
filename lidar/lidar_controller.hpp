@@ -6,10 +6,14 @@
 //     raw_logger_  → /data/robot/lidar/cloud_*.ply (syrový cloud)
 //     proc_logger_ → /data/robot/lidar/trans_*.ply (transform + ořez)
 // • loopRead():
-//     1. uloží syrový cloud (raw_logger_)
-//     2. vytvoří transformovaný cloud (pointproc::transformCloud)
-//     3. uloží transformovaný cloud (proc_logger_)
-//     4. minimum počítá z transformovaného cloudu (pointproc::minDistance)
+//     - pro cloud:
+//         1. uloží syrový cloud (raw_logger_)
+//         2. vytvoří transformovaný cloud (pointproc::transformCloud)
+//         3. uloží transformovaný cloud (proc_logger_)
+//         4. minimum počítá z transformovaného cloudu (pointproc::minDistance)
+//     - pro IMU:
+//         1. po přijetí IMU paketu zavolá getImuData()
+//         2. vypíše IMU hodnoty na stdout
 //
 // Design:
 //   - reader_ + UDP socket se inicializují jen jednou (initializeUDP).
@@ -26,22 +30,25 @@
 #include <mutex>
 #include <limits>
 #include <cstdint>
+#include <iomanip>
 
 #include "unitree_lidar_sdk.h"
 #include "unitree_lidar_protocol.h"
 
 #include "point_processing.hpp"
-#include "ply_logger.hpp"
+//#include "ply_logger.hpp"
+#include "raw_logger.hpp"
 
 namespace unilidar = unilidar_sdk2;
 
 class LidarController {
 public:
     LidarController()
-        : raw_logger_("/data/robot/lidar", "cloud_"),
-          proc_logger_("/data/robot/lidar", "trans_")
+        //: points_(),
+          //raw_logger_("/data/robot/lidar", "cloud_"),
+          //proc_logger_("/data/robot/lidar", "trans_")
     {
-        resetDistance();
+        //resetDistance();
     }
 
     ~LidarController() {
@@ -69,8 +76,10 @@ public:
                 std::cout << "[LIDAR] already running" << std::endl;
                 return true;
             }
+            
+            //points_->clear();
 
-            resetDistance();
+            //resetDistance();
 
             // Pokud reader_ ještě neexistuje, vytvoříme ho + initializeUDP
             if (!ensureReaderLocked()) {
@@ -96,7 +105,8 @@ public:
 
             {
                 std::lock_guard<std::mutex> lg(mtx_);
-                resetDistance();
+                //resetDistance();
+                //points_->clear();
                 running_.store(true, std::memory_order_relaxed);
                 worker_ = std::thread(&LidarController::loopRead, this);
             }
@@ -109,6 +119,8 @@ public:
             std::cerr << "[LIDAR] start: unknown exception" << std::endl;
             return false;
         }
+
+        point_processing_.clear();
 
         return true;
     }
@@ -141,14 +153,17 @@ public:
         // 4) reset lokálního stavu
         {
             std::lock_guard<std::mutex> lg(mtx_);
-            resetDistance();
+            //resetDistance();
+            point_processing_.clear();
         }
 
         std::cout << "[LIDAR] stopped" << std::endl;
     }
 
+
     // Vrací poslední změřenou vzdálenost a pořadové číslo "rev_min" měření.
     // true  = platná data, false = žádná / neběží.
+    /*
     bool getDistance(uint64_t &seq_out, float &dist_out) const {
         const bool running = running_.load(std::memory_order_relaxed);
         seq_out = seq_.load(std::memory_order_relaxed);
@@ -160,6 +175,7 @@ public:
         dist_out = latest_.load(std::memory_order_relaxed);
         return true;
     }
+    */
 
     // Nastaví pracovní mód LiDARu (bitová maska podle SDK).
     // Lze volat pouze, pokud LiDAR neběží (running_ == false).
@@ -190,6 +206,13 @@ public:
 
         return true;
     }
+
+
+    bool getDistance(float &dist_out) {
+        dist_out = point_processing_.distance();
+        return dist_out < 0 ? false : true;
+    }
+
 
 private:
     // RAII deleter pro UnitreeLidarReader (SDK2)
@@ -228,13 +251,101 @@ private:
         return true;
     }
 
+    /*
     void resetDistance() {
         latest_.store(-1.0f, std::memory_order_relaxed);
         seq_.store(0u, std::memory_order_relaxed);
     }
+    */
 
-    // Čtecí smyčka: parsuje pakety, ukládá point cloudy, počítá min. vzdálenost.
+    // ----------------------------- zpracování dat -----------------------------
+
+    // Zpracování point cloudu (původní logika z loopRead)
+    void processCloudData(unilidar::UnitreeLidarReader &r,
+                          float &rev_min,
+                          std::chrono::steady_clock::time_point &t_end)
+    {
+        unilidar::PointCloudUnitree cloud;
+        if (!r.getPointCloud(cloud)) {
+            return;
+        }
+
+        point_processing_.updateCloud(cloud);
+
+        // --- RAW log ---
+        //raw_logger_.push(cloud);
+
+        // --- Transformace + log ---
+        /*
+        auto proc = pointproc::transformCloud(cloud);
+        proc_logger_.push(proc);
+
+        float cloud_min = pointproc::minDistance(proc);
+        if (cloud_min >= 0.0f && cloud_min < rev_min) {
+            rev_min = cloud_min;
+        }
+
+        if (std::chrono::steady_clock::now() > t_end || cloud_min < 50.0f) {
+            latest_.store(rev_min, std::memory_order_relaxed);
+            seq_.fetch_add(1u, std::memory_order_relaxed);
+            t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
+            rev_min = std::numeric_limits<float>::infinity();
+
+            std::cerr << "[loopRead] data: "
+                      << latest_.load(std::memory_order_relaxed)
+                      << " seq: "
+                      << seq_.load(std::memory_order_relaxed)
+                      << std::endl;
+        }
+        */
+    }
+
+    // Zpracování IMU dat – jen vypisuje na stdout pro ověření, že IMU běží.
+    void processIMUData(unilidar::UnitreeLidarReader &r)
+    {
+        unilidar::LidarImuData imu{};
+        if (!r.getImuData(imu)) {
+            return;
+        }
+        /*
+        const auto &info = imu.info;
+        const double imu_ts =
+            static_cast<double>(info.stamp.sec) +
+            static_cast<double>(info.stamp.nsec) / 1.0e9;
+        const double sys_ts = unilidar::getSystemTimeStamp();
+
+        std::cout << std::fixed << std::setprecision(9);
+        std::cout << "[IMU] seq=" << info.seq
+                  << " imu_ts=" << imu_ts
+                  << " sys_ts=" << sys_ts << '\n';
+
+        std::cout << "      q      = ["
+                  << imu.quaternion[0] << ", "
+                  << imu.quaternion[1] << ", "
+                  << imu.quaternion[2] << ", "
+                  << imu.quaternion[3] << "]\n";
+
+        std::cout << "      gyro   = ["
+                  << imu.angular_velocity[0] << ", "
+                  << imu.angular_velocity[1] << ", "
+                  << imu.angular_velocity[2] << "]\n";
+
+        std::cout << "      acc    = ["
+                  << imu.linear_acceleration[0] << ", "
+                  << imu.linear_acceleration[1] << ", "
+                  << imu.linear_acceleration[2] << "]"
+                  << std::endl;
+        */
+    }
+
+    inline uint64_t getMonotonicTimeNs() {
+        using namespace std::chrono;
+        return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+    }
+
+    // Čtecí smyčka: parsuje pakety, deleguje na processCloudData/processIMUData.
     void loopRead() {
+        LidarRawLogger raw_logger;
         float rev_min = std::numeric_limits<float>::infinity();
         auto t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
 
@@ -245,35 +356,25 @@ private:
                 break;
             }
 
-            int pkt = r->runParse();
-            if (pkt == LIDAR_POINT_DATA_PACKET_TYPE) {
-                unilidar::PointCloudUnitree cloud;
-                if (r->getPointCloud(cloud)) {
-                    // --- RAW log ---
-                    raw_logger_.push(cloud);
+            int type = r->runParse();
+            uint64_t mono_ts_ns = getMonotonicTimeNs();  
 
-                    // --- Transformace + log ---
-                    auto proc = pointproc::transformCloud(cloud);
-                    proc_logger_.push(proc);
-
-                    float cloud_min = pointproc::minDistance(proc);
-                    if (cloud_min >= 0.0f && cloud_min < rev_min) {
-                        rev_min = cloud_min;
-                    }
-
-                    if (std::chrono::steady_clock::now() > t_end || cloud_min < 50.0f) {
-                        latest_.store(rev_min, std::memory_order_relaxed);
-                        seq_.fetch_add(1u, std::memory_order_relaxed);
-                        t_end = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
-                        rev_min = std::numeric_limits<float>::infinity();
-
-                        std::cerr << "[loopRead] data: " << latest_.load(std::memory_order_relaxed)
-                                  << " seq: " << seq_.load(std::memory_order_relaxed) << std::endl;
-                    }
-                }
+            if (type == LIDAR_POINT_DATA_PACKET_TYPE) {
+                const auto& pkt = r->getLidarPointDataPacket();
+                raw_logger.writePointPacket(pkt, mono_ts_ns);
+                processCloudData(*r, rev_min, t_end);
+            } else if (type == LIDAR_IMU_DATA_PACKET_TYPE) {
+                const auto& pkt = r->getLidarImuDataPacket();
+                raw_logger.writeImuPacket(pkt, mono_ts_ns);
+                processIMUData(*r);
+            } else if (type == LIDAR_VERSION_PACKET_TYPE) {
+                const auto& pkt = r->getLidarVersionDataPacket();
+                raw_logger.writeVersionPacket(pkt, mono_ts_ns);
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            
         }
     }
 
@@ -283,8 +384,10 @@ private:
 
     std::unique_ptr<unilidar::UnitreeLidarReader, RD> reader_;
     std::thread worker_;
-    PLYLogger raw_logger_;   // syrový cloud
-    PLYLogger proc_logger_;  // transformovaný cloud
+    //PLYLogger raw_logger_;   // syrový cloud
+    //PLYLogger proc_logger_;  // transformovaný cloud
+
+    LidarPointProcessing point_processing_;
 
     std::atomic<bool>     running_{false};
     std::atomic<float>    latest_;
