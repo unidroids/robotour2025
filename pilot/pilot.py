@@ -124,7 +124,7 @@ class Pilot:
         Navigační smyčka:
         - čte GNSS NavFusionData (10 Hz)
         - vybere near point na přímce S–E s L_near
-        - vyhodnotí cíl
+        - vyhodnotí waypoint/cíl
         - vypočte korekci rychlostí kol
         - odešle rychlosti kol do služby drive
         """

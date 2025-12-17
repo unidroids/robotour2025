@@ -23,7 +23,8 @@ public:
         float y;
         float z;
         float intensity;
-        double time;          // absolutní čas [s] (cloud.stamp + point.time)
+        double ftime;          // absolutní čas [s] (cloud.stamp + point.time)
+        double rtime;
         std::uint32_t ring;
     };
 
@@ -46,7 +47,8 @@ public:
             s.y = pt.y;
             s.z = pt.z;
             s.intensity = pt.intensity;
-            s.time = base_stamp + static_cast<double>(pt.time); // point.time je relativní od cloud.stamp :contentReference[oaicite:2]{index=2}
+            s.ftime = base_stamp; 
+            s.rtime = static_cast<double>(pt.time); // point.time je relativní od cloud.stamp :contentReference[oaicite:2]{index=2}
             s.ring = pt.ring;
 
             pushSample(s);
@@ -266,19 +268,21 @@ private:
         ofs << "property float y\n";
         ofs << "property float z\n";
         ofs << "property float intensity\n";
-        ofs << "property double time\n";
+        ofs << "property double ftime\n";
+        ofs << "property double rtime\n";
         ofs << "property uint32 ring\n";
         ofs << "end_header\n";
 
         // data: pro jednoduchost v pořadí [0..N-1] v bufferu
-        ofs << std::setprecision(6) << std::fixed;
+        ofs << std::setprecision(7) << std::fixed;
         for (std::size_t i = 0; i < N; ++i) {
             const Sample &p = buffer_[i];
             ofs << p.x << " "
                 << p.y << " "
                 << p.z << " "
                 << p.intensity << " "
-                << p.time << " "
+                << p.ftime << " "
+                << p.rtime << " "
                 << p.ring << "\n";
         }
     }
