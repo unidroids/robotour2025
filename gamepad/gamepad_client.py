@@ -51,6 +51,19 @@ def handle_client(conn: socket.socket, addr):
                             payload = core.latest_payload  # str
                         _send_line(conn, payload)
 
+                    elif cmd == "BUTTONS":
+                        with core.cond:
+                            core.cond.wait_for(lambda: core.stop_event.is_set() or core.msg_index > last_idx, timeout=0.5)
+                            if core.stop_event.is_set() or core.compute_thread_started==False:
+                                _send_line(conn, "0 0 0 0#STOPPED")
+                                continue
+                            payload = core.latest_buttons
+                            if payload is None:
+                                _send_line(conn, "0 0 0 0#NO DATA")
+                                continue
+                        _send_line(conn, payload)
+
+
                     elif cmd == "STOP":
                         _send_line(conn, "OK STOPPING GAMEPAD")
                         core.stop_all()

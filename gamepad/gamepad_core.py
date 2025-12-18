@@ -18,13 +18,15 @@ lock = threading.Lock()
 cond = threading.Condition(lock)   # ⬅ místo Event budeme vysílat notify_all()
 
 axes = {'axis_0': 0.0, 'axis_1': 0.0, 'axis_2': 0.0, 'axis_3': 0.0}
+buttons = {'b_0': 0, 'b_1': 0, 'b_2': 0, 'b_3': 0, 'b_4': 0}
 last_button = None
 
 left_wheel = 0
 right_wheel = 0
 
 last_ts = 0.0
-latest_payload = None           # vždy str (JSON line)
+latest_payload = None           # vždy str 
+latest_buttons = None           # vždy str 
 msg_index = 0                   # čítač zpráv
 
 # --- Pomocné funkce ---
@@ -65,11 +67,15 @@ def read_axes_and_buttons():
     if joystick:
         for e in pygame.event.get():  # zpracuj události
             if e.type == pygame.JOYBUTTONDOWN:
-                last_button = f"BTN_{e.button}"
+                last_button = f"b_{e.button}"
+                buttons[last_button] = 1
                 print(f"[GAMEPAD] Stisk tlačítka: {last_button}")
                 if e.button in SELECT_BUTTONS:
                     mode = "WHEEL" if mode == "DRIVE" else "DRIVE"
                     print(f"[GAMEPAD] Přepnuto na režim: {mode}")
+            if e.type == pygame.JOYBUTTONUP:
+                last_button = f"b_{e.button}"
+                buttons[last_button] = 0
 
         a0 = joystick.get_axis(0) if joystick.get_numaxes() > 0 else 0.0  # levá horiz
         a1 = joystick.get_axis(1) if joystick.get_numaxes() > 1 else 0.0  # levá vert
@@ -121,7 +127,7 @@ def build_payload():
 
 # --- Vlákno výpočtů (100 ms) ---
 def compute_loop():
-    global last_ts, latest_payload, msg_index, compute_thread_started
+    global last_ts, latest_payload, msg_index, compute_thread_started, latest_buttons
     print("[GAMEPAD] Vlákno výpočtů START")
     try:
         while not stop_event.is_set():
@@ -133,8 +139,10 @@ def compute_loop():
             last_ts = time.time()
             msg_index += 1
             payload = build_payload()
+            payload_buttons = f"{buttons['b_0']} {buttons['b_1']} {buttons['b_2']} {buttons['b_3']} {buttons['b_4']}"
             with cond:
                 latest_payload = payload  # str
+                latest_buttons = payload_buttons
                 cond.notify_all()
             #print("[GAMEPAD] Vlákno výpočtů LOOP", latest_payload)
             time.sleep(POLL_PERIOD_SEC)
