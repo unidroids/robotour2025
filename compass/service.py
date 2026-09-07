@@ -5,7 +5,6 @@ from typing import Optional
 from imu_serial import ImuSerialIO
 from dispatcher import MessageDispatcher
 from handlers.angle_handler import AngleHandler
-from handlers.quaternion_handler import QuaternionHandler
 from handlers.acc_handler import AccHandler
 from handlers.gyro_handler import GyroHandler
 from handlers.mag_handler import MagHandler
@@ -49,14 +48,12 @@ class CompassService:
                 self.gyro_handler = GyroHandler(self.zmq_pub)
                 self.angle_handler = AngleHandler(self.zmq_pub)
                 self.mag_handler = MagHandler(self.zmq_pub)
-                self.quaternion_handler = QuaternionHandler(self.zmq_pub)
                 self.dummy_handler = DummyHandler()
                 
                 self.dispatcher.register_handler(0x51, self.acc_handler)
                 self.dispatcher.register_handler(0x52, self.gyro_handler)
                 self.dispatcher.register_handler(0x53, self.angle_handler)
                 self.dispatcher.register_handler(0x54, self.mag_handler)
-                self.dispatcher.register_handler(0x59, self.quaternion_handler)
                 
                 self._initialized = True
                 
@@ -105,22 +102,22 @@ class CompassService:
         try:
             self.imu_serial.send_command(builders.build_unlock())
             time.sleep(0.05)
-            self.imu_serial.send_command(builders.build_rsw(0x021E)) # QUATER + MAG + ANGLE + GYRO + ACC
+            self.imu_serial.send_command(builders.build_rsw(builders.RSW_ACC_GYRO_ANGLE_MAG)) # MAG + ANGLE + GYRO + ACC (0x001E)
             time.sleep(0.05)
             
             self.imu_serial.send_command(builders.build_unlock())
             time.sleep(0.05)
-            self.imu_serial.send_command(builders.build_rrate(0x06)) # 10Hz Output rate
+            self.imu_serial.send_command(builders.build_rrate(builders.RATE_20HZ)) # 20Hz Output rate (0x07)
             time.sleep(0.05)
             
             self.imu_serial.send_command(builders.build_unlock())
             time.sleep(0.05)
-            self.imu_serial.send_command(builders.build_bandwidth(0x06)) # 10Hz
+            self.imu_serial.send_command(builders.build_bandwidth(builders.BW_5HZ)) # 5Hz Bandwidth (0x06)
             time.sleep(0.05)
             
             self.imu_serial.send_command(builders.build_unlock())
             time.sleep(0.05)
-            self.imu_serial.send_command(builders.build_baud(0x07)) # 230400bps
+            self.imu_serial.send_command(builders.build_baud(builders.BAUD_230400)) # 230400bps (0x07)
             time.sleep(0.05)
             
             print("[SERVICE] COMPASS settings applied, saving and rebooting...")

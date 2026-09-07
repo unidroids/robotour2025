@@ -13,6 +13,7 @@ class AccHandler:
         self._latest_temp = 0.0
         self._latest_ts = 0.0
         self._last_print_time = 0.0
+        self._last_temp_pub_time = 0.0
 
     def handle(self, message_bytes: bytes):
         if len(message_bytes) != 11 or message_bytes[1] != 0x51:
@@ -37,21 +38,27 @@ class AccHandler:
         })
         msg_payload = json_data.encode('utf-8')
         
-        temp_json = json.dumps({
-            "ts": current_time,
-            "temp": self._latest_temp
-        })
-        temp_payload = temp_json.encode('utf-8')
-        
         if current_time - self._last_print_time > 1.0:
             print(f"[AccHandler] ACC {json_data} | Temp: {self._latest_temp:.2f}°C")
             self._last_print_time = current_time
             
         try:
             self._zmq_pub.send_multipart([b"ACC", msg_payload])
-            self._zmq_pub.send_multipart([b"TEMP", temp_payload])
         except Exception:
             pass
+
+        # Publikovat téma TEMP pouze 1× za sekundu
+        if current_time - self._last_temp_pub_time >= 1.0:
+            temp_json = json.dumps({
+                "ts": current_time,
+                "temp": self._latest_temp
+            })
+            temp_payload = temp_json.encode('utf-8')
+            try:
+                self._zmq_pub.send_multipart([b"TEMP", temp_payload])
+                self._last_temp_pub_time = current_time
+            except Exception:
+                pass
 
     def get_latest(self) -> dict:
         return {
