@@ -21,6 +21,8 @@ class FusionCore:
         self._hAcc: float = 0.0
         self._gpsSol: str = "NONE"
         self._have_position: bool = False
+        self._bestnav_pos_type: str = "NONE"
+        self._uniheading_pos_type: str = "NONE"
 
         # Headings
         self.gps_heading = HeadingData()
@@ -40,6 +42,14 @@ class FusionCore:
         # Fusion state
         self._fusionSol: str = "NONE"
 
+    @property
+    def bestnav_pos_type(self) -> str:
+        return self._bestnav_pos_type
+
+    @property
+    def uniheading_pos_type(self) -> str:
+        return self._uniheading_pos_type
+
     @staticmethod
     def _norm_deg(a: float) -> float:
         """Normalizace do [0, 360)."""
@@ -56,6 +66,7 @@ class FusionCore:
         self._lon = float(lon)
         self._hAcc = float(hAcc)
         self._gpsSol = gpsSol
+        self._bestnav_pos_type = gpsSol
         self._have_position = True
         self._last_msg_mono_ts = time.monotonic()
         self._update_ready_flag()
@@ -69,6 +80,7 @@ class FusionCore:
         self.dual_heading.heading = self._norm_deg(heading)
         self.dual_heading.acc = float(headingAcc)
         self.dual_heading.sol = headingSol
+        self._uniheading_pos_type = headingSol
         self._last_msg_mono_ts = time.monotonic()
         
         if self.dual_heading.sol == "NARROW_INT" and self.dual_heading.acc < 1.5:
@@ -134,4 +146,6 @@ class FusionCore:
             gpsSol=self._gpsSol,
             headingSol=self.fused_heading.sol,
             fusionSol=self._fusionSol,
+            bestnav_pos_type=self.bestnav_pos_type,
+            uniheading_pos_type=self.uniheading_pos_type,
         )

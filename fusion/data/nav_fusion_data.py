@@ -28,6 +28,8 @@ class NavFusionData:
     gpsSol: str
     headingSol: str
     fusionSol: str
+    bestnav_pos_type: str = "NONE"
+    uniheading_pos_type: str = "NONE"
 
     # --- API ---
     def to_json(self) -> str:
@@ -46,6 +48,8 @@ class NavFusionData:
             "gpsSol": self.gpsSol,
             "headingSol": self.headingSol,
             "fusionSol": self.fusionSol,
+            "bestnav_pos_type": self.bestnav_pos_type,
+            "uniheading_pos_type": self.uniheading_pos_type,
         })
 
 
@@ -65,5 +69,7 @@ if __name__ == "__main__":
         gpsSol="SINGLE",
         headingSol="NONE",
         fusionSol="NONE",
+        bestnav_pos_type="SINGLE",
+        uniheading_pos_type="NONE",
     )
     print("to_json:", state.to_json())
